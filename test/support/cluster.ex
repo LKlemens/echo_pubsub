@@ -20,7 +20,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
 
   defmacro assert_peer_receive(peer, pattern, timeout \\ 5_000) do
     quote do
-      start_time = System.monotonic_time()
+      start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
       PhoenixPubSubBuffered.Cluster.remote_message_check(
@@ -35,7 +35,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
 
   defmacro refute_peer_receive(peer, pattern, timeout \\ 300) do
     quote do
-      start_time = System.monotonic_time()
+      start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
       PhoenixPubSubBuffered.Cluster.remote_message_check(
@@ -49,7 +49,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
   end
 
   def remote_message_check(peer, match_fn, type, start_time, timeout, messages \\ []) do
-    now = System.monotonic_time()
+    now = System.monotonic_time(:millisecond)
 
     message =
       remote_run peer do

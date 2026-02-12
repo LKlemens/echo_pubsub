@@ -28,7 +28,8 @@ defmodule PhoenixPubSubBuffered.Producer do
       group: group,
       write_cursor: 0,
       read_cursors: Map.new(pids, &{node(&1), 0}),
-      buffer: :array.new(buffer_size)
+      buffer: :array.new(buffer_size),
+      flush_timer: nil
     }
 
     {:ok, state}
@@ -36,15 +37,17 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_call({:write, message}, _from, state) do
-    remote_pids =
-      pg_members(state.group)
-      |> Enum.filter(&(node(&1) != node()))
-
-    for pid <- remote_pids, do: send(self(), {:flush, pid})
-
     i = rem(state.write_cursor, :array.size(state.buffer))
     buffer = :array.set(i, message, state.buffer)
-    state = %{state | buffer: buffer, write_cursor: state.write_cursor + 1}
+
+    flush_timer = maybe_start_flush_timer(state)
+
+    state = %{
+      state
+      | buffer: buffer,
+        write_cursor: state.write_cursor + 1,
+        flush_timer: flush_timer
+    }
 
     {:reply, :ok, state}
   end
@@ -57,6 +60,21 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_info({_ref, :leave, _group, _leaving}, state), do: {:noreply, state}
+
+  @impl GenServer
+  def handle_info(:flush_all, state) do
+    remote_pids =
+      pg_members(state.group)
+      |> Enum.filter(&(node(&1) != node()))
+
+    state =
+      Enum.reduce(remote_pids, state, fn pid, acc ->
+        cursor = Map.get(acc.read_cursors, node(pid), 0)
+        send_messages(pid, cursor, acc)
+      end)
+
+    {:noreply, %{state | flush_timer: nil}}
+  end
 
   @impl GenServer
   def handle_info({:flush, pid}, state) do
@@ -106,5 +124,13 @@ defmodule PhoenixPubSubBuffered.Producer do
   defp get_message(cursor, state) do
     i = rem(cursor, :array.size(state.buffer))
     :array.get(i, state.buffer)
+  end
+
+  defp maybe_start_flush_timer(state) do
+    if is_nil(state.flush_timer) do
+      %{state | flush_timer: Process.send_after(self(), :flush_all, 200)}
+    else
+      state
+    end
   end
 end

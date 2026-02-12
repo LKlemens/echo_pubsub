@@ -101,4 +101,37 @@ defmodule PhoenixPubSubBufferedTest do
     node = peer1.node
     assert_peer_receive peer2, {:cursor_expired, ^node}
   end
+
+  test "messages are batched together within 200ms window", %{peer1: peer1, peer2: peer2} do
+    # send messages rapidly (within 200ms window)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg1)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg2)
+
+    # wait for batch to arrive
+    assert_peer_receive peer2, :batch_msg1
+    assert_peer_receive peer2, :batch_msg2
+
+    # verify messages were sent in a single batch
+    last_batch =
+      remote_run peer2 do
+        GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch)
+      end
+
+    assert length(last_batch) >= 2, "Expected batched messages, got: #{inspect(last_batch)}"
+  end
+
+  test "does not send duplicated messages to the broadcasting node", %{peer1: peer1, peer2: peer2} do
+    # peer1 subscribes to the same topic it will broadcast to
+    remote_run peer1, do: PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    # peer1 broadcasts a message
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :self_message)
+
+    # peer2 should receive the message (already subscribed in setup)
+    assert_peer_receive peer2, :self_message
+
+    # peer1 should receive exactly one message (from local PubSub, not duplicated via producer)
+    assert_peer_receive peer1, :self_message
+    refute_peer_receive peer1, :self_message
+  end
 end

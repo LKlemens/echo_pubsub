@@ -9,7 +9,7 @@ defmodule PhoenixPubSubBuffered.Worker do
   @impl true
   def init({name, group}) do
     :ok = pg_join(group)
-    {:ok, %{pubsub: name, registrations: MapSet.new()}}
+    {:ok, %{pubsub: name, registrations: MapSet.new(), last_batch: []}}
   end
 
   @impl true
@@ -22,7 +22,7 @@ defmodule PhoenixPubSubBuffered.Worker do
   def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
     Enum.each(messages, fn message -> handle_call(message, from, state) end)
 
-    {:reply, :ok, state}
+    {:reply, :ok, %{state | last_batch: messages}}
   end
 
   @impl true
@@ -42,6 +42,11 @@ defmodule PhoenixPubSubBuffered.Worker do
   def handle_call({:expired, node}, _from, state) do
     broadcast_expired_message(state.pubsub, node)
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:get_last_batch, _from, state) do
+    {:reply, state.last_batch, state}
   end
 
   @impl true
