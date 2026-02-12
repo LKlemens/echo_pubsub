@@ -17,6 +17,7 @@ defmodule PhoenixPubSubBuffered do
     * `:name` - The required name to register the PubSub processes, ie: `MyApp.PubSub`
     * `:pool_size` - The number of producers and workers to run on each node, allowing concurrent message delivery.
     * `:buffer_size` - The amount of messages to maintain in memory
+    * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
 
   ## Implementation
 
@@ -84,6 +85,7 @@ defmodule PhoenixPubSubBuffered do
     adapter_name = Keyword.fetch!(opts, :adapter_name)
     pool_size = Keyword.get(opts, :pool_size, 1)
     buffer_size = Keyword.get(opts, :buffer_size, 10_000)
+    batch_interval = Keyword.get(opts, :batch_interval, 200)
 
     [_ | groups] =
       for number <- 1..pool_size do
@@ -101,7 +103,7 @@ defmodule PhoenixPubSubBuffered do
         producer_id = Module.concat(group, :Producer)
 
         [
-          Supervisor.child_spec({Producer, {buffer_size, group}}, id: producer_id),
+          Supervisor.child_spec({Producer, {buffer_size, batch_interval, group}}, id: producer_id),
           Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
         ]
       end)

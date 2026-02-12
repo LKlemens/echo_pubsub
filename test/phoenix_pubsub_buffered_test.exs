@@ -102,7 +102,14 @@ defmodule PhoenixPubSubBufferedTest do
     assert_peer_receive peer2, {:cursor_expired, ^node}
   end
 
-  test "messages are batched together within 200ms window", %{peer1: peer1, peer2: peer2} do
+  test "messages are batched together within 200ms window" do
+    # spawn nodes with batch_interval: 200 for batching behavior
+    [peer1, peer2] = spawn_nodes(["batch_node1", "batch_node2"], batch_interval: 200)
+
+    remote_run peer2 do
+      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+    end
+
     # send messages rapidly (within 200ms window)
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg1)
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg2)

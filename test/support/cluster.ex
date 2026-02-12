@@ -1,7 +1,7 @@
 defmodule PhoenixPubSubBuffered.Cluster do
-  def spawn_nodes(node_names) do
+  def spawn_nodes(node_names, opts \\ []) do
     node_names
-    |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes) | nodes] end)
+    |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes, opts) | nodes] end)
     |> Enum.reverse()
   end
 
@@ -79,13 +79,13 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end
   end
 
-  def spawn_node(name, nodes) do
+  def spawn_node(name, nodes, opts \\ []) do
     {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
     connect_to_cluster(pid, nodes)
     transfer_config(pid)
-    start_apps(pid)
+    start_apps(pid, opts)
 
     %{node: node, pid: pid}
   end
@@ -108,7 +108,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end)
   end
 
-  defp start_apps(pid) do
+  defp start_apps(pid, opts) do
     :peer.call(pid, Application, :ensure_all_started, [:mix])
     :peer.call(pid, Mix, :env, [Mix.env()])
 
@@ -116,13 +116,19 @@ defmodule PhoenixPubSubBuffered.Cluster do
       :peer.call(pid, Application, :ensure_all_started, [app_name])
     end
 
-    remote_run %{pid: pid} do
+    batch_interval = Keyword.get(opts, :batch_interval, 0)
+
+    remote_run %{pid: pid}, batch_interval: batch_interval do
       parent = self()
 
       spawn(fn ->
         children = [
           {Phoenix.PubSub,
-           name: PubSubTest, adapter: PhoenixPubSubBuffered, pool_size: 1, buffer_size: 10},
+           name: PubSubTest,
+           adapter: PhoenixPubSubBuffered,
+           pool_size: 1,
+           buffer_size: 10,
+           batch_interval: batch_interval},
           {PhoenixPubSubBuffered.TestSubscriber, name: PhoenixPubSubBuffered.TestSubscriber}
         ]
 

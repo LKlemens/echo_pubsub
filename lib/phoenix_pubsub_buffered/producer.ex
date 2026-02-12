@@ -2,8 +2,8 @@ defmodule PhoenixPubSubBuffered.Producer do
   @moduledoc false
   use GenServer
 
-  def start_link({buffer_size, group}) do
-    GenServer.start_link(__MODULE__, {buffer_size, group}, name: name(group))
+  def start_link({buffer_size, batch_interval, group}) do
+    GenServer.start_link(__MODULE__, {buffer_size, batch_interval, group}, name: name(group))
   end
 
   def buffer_and_send(group, message) do
@@ -19,7 +19,7 @@ defmodule PhoenixPubSubBuffered.Producer do
   end
 
   @impl GenServer
-  def init({buffer_size, group}) do
+  def init({buffer_size, batch_interval, group}) do
     {_ref, pids} = :pg.monitor(Phoenix.PubSub, group)
 
     Enum.each(pids, &GenServer.call(&1, {:register, node()}))
@@ -29,6 +29,7 @@ defmodule PhoenixPubSubBuffered.Producer do
       write_cursor: 0,
       read_cursors: Map.new(pids, &{node(&1), 0}),
       buffer: :array.new(buffer_size),
+      batch_interval: batch_interval,
       flush_timer: nil
     }
 
@@ -126,9 +127,14 @@ defmodule PhoenixPubSubBuffered.Producer do
     :array.get(i, state.buffer)
   end
 
+  defp maybe_start_flush_timer(%{batch_interval: 0} = state) do
+    send(self(), :flush_all)
+    state
+  end
+
   defp maybe_start_flush_timer(state) do
     if is_nil(state.flush_timer) do
-      %{state | flush_timer: Process.send_after(self(), :flush_all, 200)}
+      %{state | flush_timer: Process.send_after(self(), :flush_all, state.batch_interval)}
     else
       state
     end
