@@ -36,7 +36,9 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_call({:write, message}, _from, state) do
-    remote_pids = pg_members(state.group)
+    remote_pids =
+      pg_members(state.group)
+      |> Enum.filter(&(node(&1) != node()))
 
     for pid <- remote_pids, do: send(self(), {:flush, pid})
 
