@@ -141,4 +141,60 @@ defmodule PhoenixPubSubBufferedTest do
     assert_peer_receive peer1, :self_message
     refute_peer_receive peer1, :self_message
   end
+
+  test "retries sending messages after temporary failure", %{peer1: peer1, peer2: peer2} do
+    # Make peer2's worker reject messages
+    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+
+    # Send a message - it should fail initially
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :retry_message)
+
+    # Wait a bit, message should NOT be received yet
+    refute_peer_receive peer2, :retry_message
+
+    # Allow messages again
+    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+
+    # After retry (200ms), message should be received
+    assert_peer_receive peer2, :retry_message
+  end
+
+  test "messages are preserved during failure and delivered after recovery", %{peer1: peer1, peer2: peer2} do
+    # Make peer2's worker reject messages
+    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+
+    # Send multiple messages
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg1)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg2)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg3)
+
+    # Messages should NOT be received during failure
+    refute_peer_receive peer2, :msg1
+
+    # Allow messages again
+    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+
+    # All messages should be received after retry
+    assert_peer_receive peer2, :msg1
+    assert_peer_receive peer2, :msg2
+    assert_peer_receive peer2, :msg3
+  end
+
+  test "message delivery succeeds after multiple retry cycles", %{peer1: peer1, peer2: peer2} do
+    # Make peer2's worker reject messages
+    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+
+    # Send a message
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :persistent_retry_msg)
+
+    # Wait for multiple retry cycles (200ms each), still failing
+    Process.sleep(500)
+    refute_peer_receive peer2, :persistent_retry_msg
+
+    # Allow messages again
+    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+
+    # Message should be received after next retry
+    assert_peer_receive peer2, :persistent_retry_msg
+  end
 end

@@ -55,7 +55,13 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_info({_ref, :join, _group, new_pids}, state) do
-    state = Enum.reduce(new_pids, state, &process_joined(&1, &2))
+    {state, has_failure} =
+      Enum.reduce(new_pids, {state, false}, fn pid, {acc_state, acc_failure} ->
+        {new_state, status} = process_joined(pid, acc_state)
+        {new_state, acc_failure or status == :error}
+      end)
+
+    state = if has_failure, do: schedule_retry_flush(state), else: state
     {:noreply, state}
   end
 
@@ -68,19 +74,16 @@ defmodule PhoenixPubSubBuffered.Producer do
       pg_members(state.group)
       |> Enum.filter(&(node(&1) != node()))
 
-    state =
-      Enum.reduce(remote_pids, state, fn pid, acc ->
-        cursor = Map.get(acc.read_cursors, node(pid), 0)
-        send_messages(pid, cursor, acc)
+    {state, has_failure} =
+      Enum.reduce(remote_pids, {state, false}, fn pid, {acc_state, acc_failure} ->
+        cursor = Map.get(acc_state.read_cursors, node(pid), 0)
+        {new_state, status} = send_messages(pid, cursor, acc_state)
+        {new_state, acc_failure or status == :error}
       end)
 
-    {:noreply, %{state | flush_timer: nil}}
-  end
-
-  @impl GenServer
-  def handle_info({:flush, pid}, state) do
-    cursor = Map.get(state.read_cursors, node(pid), 0)
-    {:noreply, send_messages(pid, cursor, state)}
+    state = %{state | flush_timer: nil}
+    state = if has_failure, do: schedule_retry_flush(state), else: state
+    {:noreply, state}
   end
 
   defp process_joined(pid, state) do
@@ -90,7 +93,7 @@ defmodule PhoenixPubSubBuffered.Producer do
       resume(pid, node, state)
     else
       GenServer.call(pid, {:register, node()})
-      %{state | read_cursors: Map.put(state.read_cursors, node, state.write_cursor)}
+      {%{state | read_cursors: Map.put(state.read_cursors, node, state.write_cursor)}, :ok}
     end
   end
 
@@ -98,9 +101,14 @@ defmodule PhoenixPubSubBuffered.Producer do
     oldest = max(state.write_cursor - :array.size(state.buffer), 0)
 
     case Map.get(state.read_cursors, node, 0) do
-      cursor when cursor == state.write_cursor -> state
-      cursor when cursor < oldest -> send_expired(pid, state)
-      cursor -> send_messages(pid, cursor, state)
+      cursor when cursor == state.write_cursor ->
+        {state, :ok}
+
+      cursor when cursor < oldest ->
+        {send_expired(pid, state), :ok}
+
+      cursor ->
+        send_messages(pid, cursor, state)
     end
   end
 
@@ -112,9 +120,13 @@ defmodule PhoenixPubSubBuffered.Producer do
       |> Enum.reduce([], fn cursor, acc -> [get_message(cursor, state) | acc] end)
       |> Enum.reverse()
 
-    if GenServer.call(pid, messages) == :ok,
-      do: %{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)},
-      else: state
+    case safe_call(pid, messages) do
+      :ok ->
+        {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
+
+      :error ->
+        {state, :error}
+    end
   end
 
   defp send_expired(pid, state) do
@@ -138,5 +150,25 @@ defmodule PhoenixPubSubBuffered.Producer do
     else
       state
     end
+  end
+
+  @retry_interval 200
+  defp schedule_retry_flush(state) do
+    if is_nil(state.flush_timer) do
+      %{state | flush_timer: Process.send_after(self(), :flush_all, @retry_interval)}
+    else
+      state
+    end
+  end
+
+  defp safe_call(pid, messages) do
+    case GenServer.call(pid, messages, 5000) do
+      :ok -> :ok
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    :exit, _ -> :error
   end
 end

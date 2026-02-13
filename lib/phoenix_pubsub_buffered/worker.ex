@@ -20,9 +20,18 @@ defmodule PhoenixPubSubBuffered.Worker do
 
   @impl true
   def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
-    Enum.each(messages, fn message -> handle_call(message, from, state) end)
+    val = Application.get_env(:msg, :val, :ok)
 
-    {:reply, :ok, %{state | last_batch: messages}}
+    if val == :sleep do
+      Process.sleep(6000)
+    end
+
+    if val == :ok do
+      Enum.each(messages, fn message -> handle_call(message, from, state) end)
+    end
+
+    dbg({"worker msg accepted?", self(), val})
+    {:reply, val, %{state | last_batch: messages}}
   end
 
   @impl true
