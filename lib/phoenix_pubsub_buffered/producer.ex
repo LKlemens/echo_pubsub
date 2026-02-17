@@ -73,6 +73,12 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_info(:flush_all, state) do
+    :telemetry.execute(
+      [:phoenix_pubsub_buffered, :buffer, :flush],
+      %{buffer_size: state.write_cursor, buffer_capacity: :array.size(state.buffer)},
+      %{group: state.group}
+    )
+
     remote_pids =
       pg_members(state.group)
       |> Enum.filter(&(node(&1) != node()))
@@ -108,6 +114,12 @@ defmodule PhoenixPubSubBuffered.Producer do
         {state, :ok}
 
       cursor when cursor < oldest ->
+        :telemetry.execute(
+          [:phoenix_pubsub_buffered, :buffer, :expired],
+          %{count: 1, missed_messages: oldest - cursor},
+          %{group: state.group, node: node}
+        )
+
         {send_expired(pid, state), :ok}
 
       cursor ->
@@ -123,11 +135,12 @@ defmodule PhoenixPubSubBuffered.Producer do
       |> Enum.reduce([], fn cursor, acc -> [get_message(cursor, state) | acc] end)
       |> Enum.reverse()
 
-    case safe_call(pid, messages, state.call_timeout) do
+    case safe_call(pid, messages, state.call_timeout, state) do
       :ok ->
         {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
 
       :error ->
+        emit_sync_failure(state.group, node(pid), length(messages))
         {state, :error}
     end
   end
@@ -158,20 +171,32 @@ defmodule PhoenixPubSubBuffered.Producer do
   @retry_interval 200
   defp schedule_retry_flush(state) do
     if is_nil(state.flush_timer) do
+      :telemetry.execute(
+        [:phoenix_pubsub_buffered, :retry, :scheduled],
+        %{count: 1},
+        %{group: state.group}
+      )
+
       %{state | flush_timer: Process.send_after(self(), :flush_all, @retry_interval)}
     else
       state
     end
   end
 
-  defp safe_call(pid, messages, call_timeout) do
+  defp safe_call(pid, messages, call_timeout, _state) do
     case GenServer.call(pid, messages, call_timeout) do
       :ok -> :ok
       _ -> :error
     end
-  rescue
-    _ -> :error
   catch
-    :exit, _ -> :error
+    _, _ -> :error
+  end
+
+  defp emit_sync_failure(group, node, batch_size) do
+    :telemetry.execute(
+      [:phoenix_pubsub_buffered, :sync, :failure],
+      %{count: 1, batch_size: batch_size},
+      %{group: group, node: node}
+    )
   end
 end

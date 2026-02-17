@@ -6,7 +6,7 @@ defmodule PhoenixPubSubBuffered.MixProject do
 
   def project do
     [
-      app: :phoenix_pubsub_buffered,
+      app: :distributed_pubsub,
       version: @version,
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
@@ -44,6 +44,7 @@ defmodule PhoenixPubSubBuffered.MixProject do
   defp deps do
     [
       {:phoenix_pubsub, "~> 2.0"},
+      {:telemetry, "~> 1.0"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
