@@ -18,6 +18,20 @@ defmodule PhoenixPubSubBuffered do
     * `:pool_size` - The number of producers and workers to run on each node, allowing concurrent message delivery.
     * `:buffer_size` - The amount of messages to maintain in memory
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
+    * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
+
+  ## Configuration
+
+  Options can also be set via Application config per PubSub name:
+
+      # config/config.exs
+      config :distributed_pubsub, MyApp.PubSub,
+        pool_size: 2,
+        buffer_size: 50_000,
+        batch_interval: 100,
+        call_timeout: 5000
+
+  Options passed directly to the supervisor take precedence over config values.
 
   ## Implementation
 
@@ -83,9 +97,17 @@ defmodule PhoenixPubSubBuffered do
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
     adapter_name = Keyword.fetch!(opts, :adapter_name)
-    pool_size = Keyword.get(opts, :pool_size, 1)
-    buffer_size = Keyword.get(opts, :buffer_size, 10_000)
-    batch_interval = Keyword.get(opts, :batch_interval, 200)
+
+    # Read from Application config, with opts taking precedence
+    config = Application.get_env(:distributed_pubsub, name, [])
+    pool_size = Keyword.get(opts, :pool_size) || Keyword.get(config, :pool_size, 1)
+    buffer_size = Keyword.get(opts, :buffer_size) || Keyword.get(config, :buffer_size, 10_000)
+
+    batch_interval =
+      Keyword.get(opts, :batch_interval) || Keyword.get(config, :batch_interval, 200)
+
+    call_timeout =
+      Keyword.get(opts, :call_timeout) || Keyword.get(config, :call_timeout, 5000)
 
     [_ | groups] =
       for number <- 1..pool_size do
@@ -103,7 +125,9 @@ defmodule PhoenixPubSubBuffered do
         producer_id = Module.concat(group, :Producer)
 
         [
-          Supervisor.child_spec({Producer, {buffer_size, batch_interval, group}}, id: producer_id),
+          Supervisor.child_spec({Producer, {buffer_size, batch_interval, call_timeout, group}},
+            id: producer_id
+          ),
           Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
         ]
       end)

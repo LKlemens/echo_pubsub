@@ -2,8 +2,10 @@ defmodule PhoenixPubSubBuffered.Producer do
   @moduledoc false
   use GenServer
 
-  def start_link({buffer_size, batch_interval, group}) do
-    GenServer.start_link(__MODULE__, {buffer_size, batch_interval, group}, name: name(group))
+  def start_link({buffer_size, batch_interval, call_timeout, group}) do
+    GenServer.start_link(__MODULE__, {buffer_size, batch_interval, call_timeout, group},
+      name: name(group)
+    )
   end
 
   def buffer_and_send(group, message) do
@@ -19,7 +21,7 @@ defmodule PhoenixPubSubBuffered.Producer do
   end
 
   @impl GenServer
-  def init({buffer_size, batch_interval, group}) do
+  def init({buffer_size, batch_interval, call_timeout, group}) do
     {_ref, pids} = :pg.monitor(Phoenix.PubSub, group)
 
     Enum.each(pids, &GenServer.call(&1, {:register, node()}))
@@ -30,6 +32,7 @@ defmodule PhoenixPubSubBuffered.Producer do
       read_cursors: Map.new(pids, &{node(&1), 0}),
       buffer: :array.new(buffer_size),
       batch_interval: batch_interval,
+      call_timeout: call_timeout,
       flush_timer: nil
     }
 
@@ -120,7 +123,7 @@ defmodule PhoenixPubSubBuffered.Producer do
       |> Enum.reduce([], fn cursor, acc -> [get_message(cursor, state) | acc] end)
       |> Enum.reverse()
 
-    case safe_call(pid, messages) do
+    case safe_call(pid, messages, state.call_timeout) do
       :ok ->
         {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
 
@@ -161,8 +164,8 @@ defmodule PhoenixPubSubBuffered.Producer do
     end
   end
 
-  defp safe_call(pid, messages) do
-    case GenServer.call(pid, messages, 5000) do
+  defp safe_call(pid, messages, call_timeout) do
+    case GenServer.call(pid, messages, call_timeout) do
       :ok -> :ok
       _ -> :error
     end
