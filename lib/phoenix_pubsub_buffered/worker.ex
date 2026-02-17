@@ -30,7 +30,6 @@ defmodule PhoenixPubSubBuffered.Worker do
       Enum.each(messages, fn message -> handle_call(message, from, state) end)
     end
 
-    dbg({"worker msg accepted?", self(), val})
     {:reply, val, %{state | last_batch: messages}}
   end
 
