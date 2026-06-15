@@ -1,15 +1,15 @@
-defmodule PhoenixPubSubBuffered do
+defmodule EchoPubSub do
   @moduledoc """
   Phoenix PubSub adapter using :pg with at-least-once delivery.
 
   To start it, list it in your supervision tree as:
 
-      {Phoenix.PubSub, name: MyApp.PubSub, adapter: PhoenixPubSubBuffered}
+      {Phoenix.PubSub, name: MyApp.PubSub, adapter: EchoPubSub}
 
-  You will also need to add `:phoenix_pubsub_buffered` to your deps:
+  You will also need to add `:echo_pubsub` to your deps:
 
       defp deps do
-        [{:phoenix_pubsub_buffered, "~> 0.1.0"}]
+        [{:echo_pubsub, "~> 0.1.0"}]
       end
 
   ## Options
@@ -27,7 +27,7 @@ defmodule PhoenixPubSubBuffered do
   Options can also be set via Application config per PubSub name:
 
       # config/config.exs
-      config :distributed_pubsub, MyApp.PubSub,
+      config :echo_pubsub, MyApp.PubSub,
         pool_size: 2,
         buffer_size: 50_000,
         batch_interval: 100,
@@ -53,8 +53,8 @@ defmodule PhoenixPubSubBuffered do
 
   use Supervisor
 
-  alias PhoenixPubSubBuffered.Producer
-  alias PhoenixPubSubBuffered.Worker
+  alias EchoPubSub.Producer
+  alias EchoPubSub.Worker
   alias Phoenix.PubSub.Adapter
 
   ## Adapter callbacks
@@ -101,7 +101,7 @@ defmodule PhoenixPubSubBuffered do
     adapter_name = Keyword.fetch!(opts, :adapter_name)
 
     # Read from Application config, with opts taking precedence
-    config = Application.get_env(:distributed_pubsub, name, [])
+    config = Application.get_env(:echo_pubsub, name, [])
     pool_size = Keyword.get(opts, :pool_size) || Keyword.get(config, :pool_size, 1)
     buffer_size = Keyword.get(opts, :buffer_size) || Keyword.get(config, :buffer_size, 10_000)
 

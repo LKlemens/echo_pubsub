@@ -1,4 +1,4 @@
-defmodule PhoenixPubSubBuffered.Worker do
+defmodule EchoPubSub.Worker do
   @moduledoc false
   use GenServer
 

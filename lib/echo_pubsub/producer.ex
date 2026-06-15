@@ -1,4 +1,4 @@
-defmodule PhoenixPubSubBuffered.Producer do
+defmodule EchoPubSub.Producer do
   @moduledoc false
   use GenServer
   require Logger
@@ -93,7 +93,7 @@ defmodule PhoenixPubSubBuffered.Producer do
     buffer_capacity = :array.size(state.buffer)
 
     :telemetry.execute(
-      [:phoenix_pubsub_buffered, :buffer, :flush],
+      [:echo_pubsub, :buffer, :flush],
       %{buffer_size: buffer_size, buffer_capacity: buffer_capacity},
       %{group: state.group}
     )
@@ -141,7 +141,7 @@ defmodule PhoenixPubSubBuffered.Producer do
 
       cursor when cursor < oldest ->
         :telemetry.execute(
-          [:phoenix_pubsub_buffered, :buffer, :expired],
+          [:echo_pubsub, :buffer, :expired],
           %{count: 1, missed_messages: oldest - cursor},
           %{group: state.group, node: node}
         )
@@ -198,7 +198,7 @@ defmodule PhoenixPubSubBuffered.Producer do
   defp schedule_retry_flush(state) do
     if is_nil(state.flush_timer) do
       :telemetry.execute(
-        [:phoenix_pubsub_buffered, :retry, :scheduled],
+        [:echo_pubsub, :retry, :scheduled],
         %{count: 1},
         %{group: state.group}
       )
@@ -220,7 +220,7 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   defp emit_sync_failure(group, node, batch_size) do
     :telemetry.execute(
-      [:phoenix_pubsub_buffered, :sync, :failure],
+      [:echo_pubsub, :sync, :failure],
       %{count: 1, batch_size: batch_size},
       %{group: group, node: node}
     )
@@ -239,7 +239,7 @@ defmodule PhoenixPubSubBuffered.Producer do
       percentage = Float.round(ratio * 100, 1)
 
       :telemetry.execute(
-        [:phoenix_pubsub_buffered, :buffer, :capacity_warning],
+        [:echo_pubsub, :buffer, :capacity_warning],
         %{buffer_size: buffer_size, buffer_capacity: buffer_capacity, ratio: ratio},
         %{group: state.group}
       )

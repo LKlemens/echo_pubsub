@@ -1,4 +1,4 @@
-defmodule PhoenixPubSubBuffered.TestSubscriber do
+defmodule EchoPubSub.TestSubscriber do
   use GenServer
 
   def start_link(args) do

@@ -1,24 +1,24 @@
-defmodule PhoenixPubSubBuffered.MixProject do
+defmodule EchoPubSub.MixProject do
   use Mix.Project
 
-  @source_url "https://github.com/enewbury/phoenix_pubsub_buffered"
+  @source_url "https://github.com/LKlemens/echo_pubsub"
   @version "0.1.1"
 
   def project do
     [
-      app: :distributed_pubsub,
+      app: :echo_pubsub,
       version: @version,
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       # Docs
-      name: "PhoenixPubSubBuffered",
+      name: "EchoPubSub",
       description: "A :pg based Phoenix PubSub adapter with at-least-once delivery",
       source_url: @source_url,
       docs: [
         # The main page in the docs
-        main: "PhoenixPubSubBuffered",
+        main: "EchoPubSub",
         extras: ["README.md", "CHANGELOG.md", "LICENSE"],
         source_ref: "v#{@version}"
       ],

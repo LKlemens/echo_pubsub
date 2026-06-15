@@ -1,14 +1,14 @@
-# PhoenixPubSubBuffered
+# EchoPubSub
 
-[![Build Status](https://github.com/enewbury/phoenix_pubsub_buffered/workflows/test/badge.svg)](https://github.com/enewbury/phoenix_pubsub_buffered/actions)
-[![hex.pm version](https://img.shields.io/hexpm/v/phoenix_pubsub_buffered.svg)](https://hex.pm/packages/phoenix_pubsub_buffered)
-[![hex.pm license](https://img.shields.io/hexpm/l/phoenix_pubsub_buffered.svg)](https://github.com/enewbury/phoenix_pubsub_buffered/blob/main/LICENSE)
+[![Build Status](https://github.com/LKlemens/echo_pubsub/workflows/test/badge.svg)](https://github.com/LKlemens/echo_pubsub/actions)
+[![hex.pm version](https://img.shields.io/hexpm/v/echo_pubsub.svg)](https://hex.pm/packages/echo_pubsub)
+[![hex.pm license](https://img.shields.io/hexpm/l/echo_pubsub.svg)](https://github.com/LKlemens/echo_pubsub/blob/main/LICENSE)
 
 A Phoenix.PubSub adapter that distributes messages between nodes using the erlang `:pg` module, like the default adapter, however with the additional guarentees of "at least once" delivery. 
 
 This means that you can have nodes dissconnect temporarily from the cluster, and then "catch up" when they rejoin by maintaining a buffer of messages, and read cursors.
 
-See the [Docs](https://hexdocs.pm/phoenix_pubsub_buffered/PhoenixPubSubBuffered.html) for more information.
+See the [Docs](https://hexdocs.pm/echo_pubsub/EchoPubSub.html) for more information.
 
 ## Usage
 
@@ -16,14 +16,14 @@ See the [Docs](https://hexdocs.pm/phoenix_pubsub_buffered/PhoenixPubSubBuffered.
 ```elixir
 def deps do
   [
-    {:phoenix_pubsub_buffered, "~> 0.1.0"}
+    {:echo_pubsub, "~> 0.1.0"}
   ]
 end
 
 # application.ex
 children = [
   # ...,
-  {Phoenix.PubSub, name: MyApp.PubSub, adapter: PhoenixPubSubBuffered}
+  {Phoenix.PubSub, name: MyApp.PubSub, adapter: EchoPubSub}
 ]
 ```
 

@@ -1,15 +1,15 @@
-defmodule PhoenixPubSubBufferedTest do
+defmodule EchoPubSubTest do
   use ExUnit.Case
 
-  import PhoenixPubSubBuffered.Cluster
+  import EchoPubSub.Cluster
 
-  doctest PhoenixPubSubBuffered
+  doctest EchoPubSub
 
   setup do
     [peer1, peer2] = spawn_nodes(["node1", "node2"])
 
     remote_run peer2 do
-      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
     %{peer1: peer1, peer2: peer2}
@@ -17,7 +17,7 @@ defmodule PhoenixPubSubBufferedTest do
 
   test "receives broadcast message on all connected nodes", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
-    remote_run peer3, do: PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :message)
     assert_peer_receive peer2, :message
     assert_peer_receive peer3, :message
@@ -25,7 +25,7 @@ defmodule PhoenixPubSubBufferedTest do
 
   test "direct_broadcast targets a specific node", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
-    remote_run peer3, do: PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
     remote_run peer1, node: peer3.node do
       Phoenix.PubSub.direct_broadcast!(node, PubSubTest, "topic", :message)
@@ -59,7 +59,7 @@ defmodule PhoenixPubSubBufferedTest do
     peer3 = spawn_node("node3", [peer1])
 
     remote_run peer3 do
-      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
     remote_run(peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", 2))
@@ -107,7 +107,7 @@ defmodule PhoenixPubSubBufferedTest do
     [peer1, peer2] = spawn_nodes(["batch_node1", "batch_node2"], batch_interval: 200)
 
     remote_run peer2 do
-      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
     # send messages rapidly (within 200ms window)
@@ -129,7 +129,7 @@ defmodule PhoenixPubSubBufferedTest do
 
   test "does not send duplicated messages to the broadcasting node", %{peer1: peer1, peer2: peer2} do
     # peer1 subscribes to the same topic it will broadcast to
-    remote_run peer1, do: PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
     # peer1 broadcasts a message
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :self_message)
@@ -144,7 +144,7 @@ defmodule PhoenixPubSubBufferedTest do
 
   test "local node cursor advances to write_cursor after flush", %{peer1: peer1} do
     # Subscribe locally on peer1
-    remote_run peer1, do: PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
     # Send multiple messages from peer1
     for i <- 1..5 do
@@ -230,7 +230,7 @@ defmodule PhoenixPubSubBufferedTest do
     [peer1, peer2] = spawn_nodes(["warn_node1", "warn_node2"])
 
     remote_run peer2 do
-      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
     # Disconnect peer2 so messages accumulate in buffer
@@ -261,7 +261,7 @@ defmodule PhoenixPubSubBufferedTest do
     [peer1, peer2] = spawn_nodes(["no_warn_node1", "no_warn_node2"])
 
     remote_run peer2 do
-      PhoenixPubSubBuffered.TestSubscriber.subscribe(PubSubTest, "topic")
+      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
     remote_run peer2, node: peer1.node do

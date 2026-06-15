@@ -1,4 +1,4 @@
-defmodule PhoenixPubSubBuffered.Cluster do
+defmodule EchoPubSub.Cluster do
   def spawn_nodes(node_names, opts \\ []) do
     node_names
     |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes, opts) | nodes] end)
@@ -23,7 +23,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
       start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
-      PhoenixPubSubBuffered.Cluster.remote_message_check(
+      EchoPubSub.Cluster.remote_message_check(
         unquote(peer),
         match_fn,
         :assert,
@@ -38,7 +38,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
       start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
-      PhoenixPubSubBuffered.Cluster.remote_message_check(
+      EchoPubSub.Cluster.remote_message_check(
         unquote(peer),
         match_fn,
         :refute,
@@ -53,7 +53,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
 
     message =
       remote_run peer do
-        PhoenixPubSubBuffered.TestSubscriber.get_message()
+        EchoPubSub.TestSubscriber.get_message()
       end
 
     messages = if not is_nil(message), do: messages ++ [message], else: messages
@@ -142,19 +142,19 @@ defmodule PhoenixPubSubBuffered.Cluster do
         children = [
           {Phoenix.PubSub,
            name: PubSubTest,
-           adapter: PhoenixPubSubBuffered,
+           adapter: EchoPubSub,
            pool_size: 1,
            buffer_size: 10,
            batch_interval: batch_interval,
            capacity_warning_threshold: capacity_warning_threshold,
            capacity_warning_interval: capacity_warning_interval},
-          {PhoenixPubSubBuffered.TestSubscriber, name: PhoenixPubSubBuffered.TestSubscriber}
+          {EchoPubSub.TestSubscriber, name: EchoPubSub.TestSubscriber}
         ]
 
         {:ok, supervisor_pid} =
           Supervisor.start_link(children,
             strategy: :one_for_one,
-            name: PhoenixPubSubBuffered.TestSupervisor
+            name: EchoPubSub.TestSupervisor
           )
 
         send(parent, {:started, supervisor_pid})
