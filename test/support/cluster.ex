@@ -1,7 +1,7 @@
 defmodule PhoenixPubSubBuffered.Cluster do
-  def spawn_nodes(node_names) do
+  def spawn_nodes(node_names, opts \\ []) do
     node_names
-    |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes) | nodes] end)
+    |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes, opts) | nodes] end)
     |> Enum.reverse()
   end
 
@@ -20,7 +20,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
 
   defmacro assert_peer_receive(peer, pattern, timeout \\ 5_000) do
     quote do
-      start_time = System.monotonic_time()
+      start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
       PhoenixPubSubBuffered.Cluster.remote_message_check(
@@ -35,7 +35,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
 
   defmacro refute_peer_receive(peer, pattern, timeout \\ 300) do
     quote do
-      start_time = System.monotonic_time()
+      start_time = System.monotonic_time(:millisecond)
       match_fn = fn message -> match?(unquote(pattern), message) end
 
       PhoenixPubSubBuffered.Cluster.remote_message_check(
@@ -49,7 +49,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
   end
 
   def remote_message_check(peer, match_fn, type, start_time, timeout, messages \\ []) do
-    now = System.monotonic_time()
+    now = System.monotonic_time(:millisecond)
 
     message =
       remote_run peer do
@@ -79,13 +79,25 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end
   end
 
-  def spawn_node(name, nodes) do
+  def assert_wait_for(fun), do: assert_wait_for(1000, fun)
+
+  def assert_wait_for(timeout, fun) when timeout <= 0, do: fun.()
+
+  def assert_wait_for(timeout, fun) do
+    fun.()
+  rescue
+    ExUnit.AssertionError ->
+      Process.sleep(10)
+      assert_wait_for(max(0, timeout - 10), fun)
+  end
+
+  def spawn_node(name, nodes, opts \\ []) do
     {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
     connect_to_cluster(pid, nodes)
     transfer_config(pid)
-    start_apps(pid)
+    start_apps(pid, opts)
 
     %{node: node, pid: pid}
   end
@@ -108,7 +120,7 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end)
   end
 
-  defp start_apps(pid) do
+  defp start_apps(pid, opts) do
     :peer.call(pid, Application, :ensure_all_started, [:mix])
     :peer.call(pid, Mix, :env, [Mix.env()])
 
@@ -116,13 +128,26 @@ defmodule PhoenixPubSubBuffered.Cluster do
       :peer.call(pid, Application, :ensure_all_started, [app_name])
     end
 
-    remote_run %{pid: pid} do
+    batch_interval = Keyword.get(opts, :batch_interval, 0)
+    capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
+    capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
+
+    remote_run %{pid: pid},
+      batch_interval: batch_interval,
+      capacity_warning_threshold: capacity_warning_threshold,
+      capacity_warning_interval: capacity_warning_interval do
       parent = self()
 
       spawn(fn ->
         children = [
           {Phoenix.PubSub,
-           name: PubSubTest, adapter: PhoenixPubSubBuffered, pool_size: 1, buffer_size: 10},
+           name: PubSubTest,
+           adapter: PhoenixPubSubBuffered,
+           pool_size: 1,
+           buffer_size: 10,
+           batch_interval: batch_interval,
+           capacity_warning_threshold: capacity_warning_threshold,
+           capacity_warning_interval: capacity_warning_interval},
           {PhoenixPubSubBuffered.TestSubscriber, name: PhoenixPubSubBuffered.TestSubscriber}
         ]
 
