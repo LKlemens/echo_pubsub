@@ -19,6 +19,8 @@ defmodule PhoenixPubSubBuffered do
     * `:buffer_size` - The amount of messages to maintain in memory
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
     * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
+    * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning (default: 0.4)
+    * `:capacity_warning_interval` - Minimum seconds between warnings (default: 60)
 
   ## Configuration
 
@@ -109,6 +111,14 @@ defmodule PhoenixPubSubBuffered do
     call_timeout =
       Keyword.get(opts, :call_timeout) || Keyword.get(config, :call_timeout, 5000)
 
+    capacity_warning_threshold =
+      Keyword.get(opts, :capacity_warning_threshold) ||
+        Keyword.get(config, :capacity_warning_threshold, 0.4)
+
+    capacity_warning_interval =
+      Keyword.get(opts, :capacity_warning_interval) ||
+        Keyword.get(config, :capacity_warning_interval, 60)
+
     [_ | groups] =
       for number <- 1..pool_size do
         :"#{adapter_name}#{number}"
@@ -125,7 +135,10 @@ defmodule PhoenixPubSubBuffered do
         producer_id = Module.concat(group, :Producer)
 
         [
-          Supervisor.child_spec({Producer, {buffer_size, batch_interval, call_timeout, group}},
+          Supervisor.child_spec(
+            {Producer,
+             {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
+              capacity_warning_interval, group}},
             id: producer_id
           ),
           Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))

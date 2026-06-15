@@ -79,6 +79,18 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end
   end
 
+  def assert_wait_for(fun), do: assert_wait_for(1000, fun)
+
+  def assert_wait_for(timeout, fun) when timeout <= 0, do: fun.()
+
+  def assert_wait_for(timeout, fun) do
+    fun.()
+  rescue
+    ExUnit.AssertionError ->
+      Process.sleep(10)
+      assert_wait_for(max(0, timeout - 10), fun)
+  end
+
   def spawn_node(name, nodes, opts \\ []) do
     {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
 
@@ -117,8 +129,13 @@ defmodule PhoenixPubSubBuffered.Cluster do
     end
 
     batch_interval = Keyword.get(opts, :batch_interval, 0)
+    capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
+    capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
 
-    remote_run %{pid: pid}, batch_interval: batch_interval do
+    remote_run %{pid: pid},
+      batch_interval: batch_interval,
+      capacity_warning_threshold: capacity_warning_threshold,
+      capacity_warning_interval: capacity_warning_interval do
       parent = self()
 
       spawn(fn ->
@@ -128,7 +145,9 @@ defmodule PhoenixPubSubBuffered.Cluster do
            adapter: PhoenixPubSubBuffered,
            pool_size: 1,
            buffer_size: 10,
-           batch_interval: batch_interval},
+           batch_interval: batch_interval,
+           capacity_warning_threshold: capacity_warning_threshold,
+           capacity_warning_interval: capacity_warning_interval},
           {PhoenixPubSubBuffered.TestSubscriber, name: PhoenixPubSubBuffered.TestSubscriber}
         ]
 

@@ -1,9 +1,16 @@
 defmodule PhoenixPubSubBuffered.Producer do
   @moduledoc false
   use GenServer
+  require Logger
 
-  def start_link({buffer_size, batch_interval, call_timeout, group}) do
-    GenServer.start_link(__MODULE__, {buffer_size, batch_interval, call_timeout, group},
+  def start_link(
+        {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
+         capacity_warning_interval, group}
+      ) do
+    GenServer.start_link(
+      __MODULE__,
+      {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
+       capacity_warning_interval, group},
       name: name(group)
     )
   end
@@ -21,7 +28,10 @@ defmodule PhoenixPubSubBuffered.Producer do
   end
 
   @impl GenServer
-  def init({buffer_size, batch_interval, call_timeout, group}) do
+  def init(
+        {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
+         capacity_warning_interval, group}
+      ) do
     {_ref, pids} = :pg.monitor(Phoenix.PubSub, group)
 
     Enum.each(pids, &GenServer.call(&1, {:register, node()}))
@@ -33,7 +43,10 @@ defmodule PhoenixPubSubBuffered.Producer do
       buffer: :array.new(buffer_size),
       batch_interval: batch_interval,
       call_timeout: call_timeout,
-      flush_timer: nil
+      capacity_warning_threshold: capacity_warning_threshold,
+      capacity_warning_interval: capacity_warning_interval,
+      flush_timer: nil,
+      last_capacity_warning_at: nil
     }
 
     {:ok, state}
@@ -73,12 +86,22 @@ defmodule PhoenixPubSubBuffered.Producer do
 
   @impl GenServer
   def handle_info(:flush_all, state) do
+    min_read_cursor =
+      state.read_cursors |> Map.values() |> Enum.min(fn -> state.write_cursor end)
+
+    buffer_size = state.write_cursor - min_read_cursor
+    buffer_capacity = :array.size(state.buffer)
+
     :telemetry.execute(
       [:phoenix_pubsub_buffered, :buffer, :flush],
-      %{buffer_size: state.write_cursor, buffer_capacity: :array.size(state.buffer)},
+      %{buffer_size: buffer_size, buffer_capacity: buffer_capacity},
       %{group: state.group}
     )
 
+    state = maybe_warn_capacity(state, buffer_size, buffer_capacity)
+
+    # Phoenix PubSub handles local dispatch automatically via dispatch/5,
+    # so we only send messages to remote nodes to avoid duplicate local delivery
     remote_pids =
       pg_members(state.group)
       |> Enum.filter(&(node(&1) != node()))
@@ -89,6 +112,9 @@ defmodule PhoenixPubSubBuffered.Producer do
         {new_state, status} = send_messages(pid, cursor, acc_state)
         {new_state, acc_failure or status == :error}
       end)
+
+    # Advance local node cursor since local delivery is handled by Phoenix.PubSub dispatch
+    state = %{state | read_cursors: Map.put(state.read_cursors, node(), state.write_cursor)}
 
     state = %{state | flush_timer: nil}
     state = if has_failure, do: schedule_retry_flush(state), else: state
@@ -198,5 +224,33 @@ defmodule PhoenixPubSubBuffered.Producer do
       %{count: 1, batch_size: batch_size},
       %{group: group, node: node}
     )
+  end
+
+  defp maybe_warn_capacity(state, buffer_size, buffer_capacity) do
+    now = System.monotonic_time(:second)
+    ratio = buffer_size / buffer_capacity
+
+    should_warn =
+      ratio >= state.capacity_warning_threshold and
+        (is_nil(state.last_capacity_warning_at) or
+           now - state.last_capacity_warning_at >= state.capacity_warning_interval)
+
+    if should_warn do
+      percentage = Float.round(ratio * 100, 1)
+
+      :telemetry.execute(
+        [:phoenix_pubsub_buffered, :buffer, :capacity_warning],
+        %{buffer_size: buffer_size, buffer_capacity: buffer_capacity, ratio: ratio},
+        %{group: state.group}
+      )
+
+      Logger.warning(
+        "Buffer at #{percentage}% capacity (#{buffer_size}/#{buffer_capacity}) for group #{inspect(state.group)}"
+      )
+
+      %{state | last_capacity_warning_at: now}
+    else
+      state
+    end
   end
 end
