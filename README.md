@@ -1,6 +1,6 @@
 # EchoPubSub
 
-[![Build Status](https://github.com/LKlemens/echo_pubsub/workflows/test/badge.svg)](https://github.com/LKlemens/echo_pubsub/actions)
+[![CI](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml/badge.svg)](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml)
 [![hex.pm version](https://img.shields.io/hexpm/v/echo_pubsub.svg)](https://hex.pm/packages/echo_pubsub)
 [![hex.pm license](https://img.shields.io/hexpm/l/echo_pubsub.svg)](https://github.com/LKlemens/echo_pubsub/blob/main/LICENSE)
 

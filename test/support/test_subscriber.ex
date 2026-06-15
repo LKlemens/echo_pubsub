@@ -1,4 +1,5 @@
 defmodule EchoPubSub.TestSubscriber do
+  @moduledoc "Test GenServer that subscribes to a topic and buffers received messages."
   use GenServer
 
   def start_link(args) do
@@ -9,7 +10,7 @@ defmodule EchoPubSub.TestSubscriber do
     GenServer.call(__MODULE__, {:subscribe, pubsub, topic})
   end
 
-  def get_message() do
+  def get_message do
     GenServer.call(__MODULE__, :get_message)
   end
 

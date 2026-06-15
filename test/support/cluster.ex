@@ -1,4 +1,5 @@
 defmodule EchoPubSub.Cluster do
+  @moduledoc "Test helpers for spawning peer nodes and asserting on messages across a cluster."
   def spawn_nodes(node_names, opts \\ []) do
     node_names
     |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes, opts) | nodes] end)
@@ -56,7 +57,7 @@ defmodule EchoPubSub.Cluster do
         EchoPubSub.TestSubscriber.get_message()
       end
 
-    messages = if not is_nil(message), do: messages ++ [message], else: messages
+    messages = if is_nil(message), do: messages, else: messages ++ [message]
 
     case {match_fn.(message), type} do
       {true, :assert} ->
@@ -120,11 +121,14 @@ defmodule EchoPubSub.Cluster do
     end)
   end
 
+  # Dev/test build tooling that has no business running on a test peer node.
+  @skip_apps [:dialyxir, :credo, :ex_doc, :erlex]
+
   defp start_apps(pid, opts) do
     :peer.call(pid, Application, :ensure_all_started, [:mix])
     :peer.call(pid, Mix, :env, [Mix.env()])
 
-    for {app_name, _, _} <- Application.loaded_applications() do
+    for {app_name, _, _} <- Application.loaded_applications(), app_name not in @skip_apps do
       :peer.call(pid, Application, :ensure_all_started, [app_name])
     end
 

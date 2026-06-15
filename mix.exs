@@ -12,6 +12,11 @@ defmodule EchoPubSub.MixProject do
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
+      dialyzer: [
+        plt_local_path: "priv/plts",
+        plt_core_path: "priv/plts",
+        plt_add_apps: [:ex_unit, :mix]
+      ],
       # Docs
       name: "EchoPubSub",
       description: "A :pg based Phoenix PubSub adapter with at-least-once delivery",
@@ -45,7 +50,9 @@ defmodule EchoPubSub.MixProject do
     [
       {:phoenix_pubsub, "~> 2.0"},
       {:telemetry, "~> 1.0"},
-      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 end
