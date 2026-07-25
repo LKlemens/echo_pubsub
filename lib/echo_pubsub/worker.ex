@@ -2,9 +2,14 @@ defmodule EchoPubSub.Worker do
   @moduledoc false
   use GenServer
 
-  # Compiled in only under the test env, so the failure-injection branch never
-  # ships in production builds.
-  @fault_injection Mix.env() == :test
+  # Compiled in under the test env by default, so the failure-injection branch
+  # never ships in production builds. A consuming app can opt in explicitly with
+  # `config :echo_pubsub, :enable_fault_injection, true` (e.g. for demos).
+  @fault_injection Application.compile_env(
+                     :echo_pubsub,
+                     :enable_fault_injection,
+                     Mix.env() == :test
+                   )
 
   def start_link({name, group}) do
     GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
