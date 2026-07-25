@@ -2,6 +2,10 @@ defmodule EchoPubSub.Worker do
   @moduledoc false
   use GenServer
 
+  # Compiled in only under the test env, so the failure-injection branch never
+  # ships in production builds.
+  @fault_injection Mix.env() == :test
+
   def start_link({name, group}) do
     GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
   end
@@ -18,19 +22,30 @@ defmodule EchoPubSub.Worker do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
-    val = Application.get_env(:msg, :val, :ok)
+  if @fault_injection do
+    @impl true
+    def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
+      state = %{state | last_batch: messages}
 
-    if val == :sleep do
-      Process.sleep(6000)
+      case Application.get_env(:echo_pubsub, :fault_injection, :ok) do
+        :sleep ->
+          Process.sleep(6000)
+          {:reply, :error, state}
+
+        :error ->
+          {:reply, :error, state}
+
+        :ok ->
+          deliver_batch(messages, from, state)
+          {:reply, :ok, state}
+      end
     end
-
-    if val == :ok do
-      Enum.each(messages, fn message -> handle_call(message, from, state) end)
+  else
+    @impl true
+    def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
+      deliver_batch(messages, from, state)
+      {:reply, :ok, state}
     end
-
-    {:reply, val, %{state | last_batch: messages}}
   end
 
   @impl true
@@ -60,6 +75,10 @@ defmodule EchoPubSub.Worker do
   @impl true
   def handle_call(_, _from, state) do
     {:reply, {:error, :bad_message}, state}
+  end
+
+  defp deliver_batch(messages, from, state) do
+    Enum.each(messages, fn message -> handle_call(message, from, state) end)
   end
 
   defp broadcast_expired_message(pubsub, node) do

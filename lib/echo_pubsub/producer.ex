@@ -133,47 +133,47 @@ defmodule EchoPubSub.Producer do
   end
 
   defp resume(pid, node, state) do
-    oldest = max(state.write_cursor - :array.size(state.buffer), 0)
-
-    case Map.get(state.read_cursors, node, 0) do
-      cursor when cursor == state.write_cursor ->
-        {state, :ok}
-
-      cursor when cursor < oldest ->
-        :telemetry.execute(
-          [:echo_pubsub, :buffer, :expired],
-          %{count: 1, missed_messages: oldest - cursor},
-          %{group: state.group, node: node}
-        )
-
-        {send_expired(pid, state), :ok}
-
-      cursor ->
-        send_messages(pid, cursor, state)
-    end
+    send_messages(pid, Map.get(state.read_cursors, node, 0), state)
   end
+
+  # Already caught up - nothing to send. Guards against sending an empty batch
+  # (which the worker would reject as a bad message) on a redundant flush.
+  defp send_messages(_pid, cursor, %{write_cursor: cursor} = state), do: {state, :ok}
 
   defp send_messages(pid, cursor, state) do
-    %{read_cursors: read_cursors, write_cursor: write_cursor} = state
+    oldest = max(state.write_cursor - :array.size(state.buffer), 0)
 
-    messages =
-      cursor..(write_cursor - 1)
-      |> Enum.reduce([], fn cursor, acc -> [get_message(cursor, state) | acc] end)
-      |> Enum.reverse()
+    if cursor < oldest do
+      # The node fell off the ring buffer; signal expiry instead of replaying
+      # slots that newer writes have already overwritten.
+      :telemetry.execute(
+        [:echo_pubsub, :buffer, :expired],
+        %{count: 1, missed_messages: oldest - cursor},
+        %{group: state.group, node: node(pid)}
+      )
 
-    case safe_call(pid, messages, state.call_timeout, state) do
-      :ok ->
-        {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
+      {send_expired(pid, state), :ok}
+    else
+      %{read_cursors: read_cursors, write_cursor: write_cursor} = state
 
-      :error ->
-        emit_sync_failure(state.group, node(pid), length(messages))
-        {state, :error}
+      messages = Enum.map(cursor..(write_cursor - 1)//1, &get_message(&1, state))
+
+      case safe_call(pid, messages, state.call_timeout, state) do
+        :ok ->
+          {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
+
+        :error ->
+          emit_sync_failure(state.group, node(pid), length(messages))
+          {state, :error}
+      end
     end
   end
 
+  # Tell the node to reload from a source of truth, then resume it at the current
+  # write cursor so we don't re-expire it on every subsequent flush.
   defp send_expired(pid, state) do
     GenServer.call(pid, {:expired, node()})
-    Map.update!(state, :read_cursors, &Map.delete(&1, node(pid)))
+    %{state | read_cursors: Map.put(state.read_cursors, node(pid), state.write_cursor)}
   end
 
   defp get_message(cursor, state) do
@@ -225,6 +225,8 @@ defmodule EchoPubSub.Producer do
       %{group: group, node: node}
     )
   end
+
+  defp maybe_warn_capacity(state, _buffer_size, 0), do: state
 
   defp maybe_warn_capacity(state, buffer_size, buffer_capacity) do
     now = System.monotonic_time(:second)

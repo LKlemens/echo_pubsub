@@ -6,7 +6,9 @@ defmodule EchoPubSubTest do
   doctest EchoPubSub
 
   setup do
-    [peer1, peer2] = spawn_nodes(["node1", "node2"])
+    # Expiry/overflow tests intentionally fill the buffer; capacity warnings are
+    # exercised separately, so disable them here to keep test output clean.
+    [peer1, peer2] = spawn_nodes(["node1", "node2"], capacity_warning_threshold: 2.0)
 
     remote_run peer2 do
       EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
@@ -168,7 +170,7 @@ defmodule EchoPubSubTest do
 
   test "retries sending messages after temporary failure", %{peer1: peer1, peer2: peer2} do
     # Make peer2's worker reject messages
-    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
 
     # Send a message - it should fail initially
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :retry_message)
@@ -177,7 +179,7 @@ defmodule EchoPubSubTest do
     refute_peer_receive peer2, :retry_message
 
     # Allow messages again
-    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
 
     # After retry (200ms), message should be received
     assert_peer_receive peer2, :retry_message
@@ -188,7 +190,7 @@ defmodule EchoPubSubTest do
     peer2: peer2
   } do
     # Make peer2's worker reject messages
-    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
 
     # Send multiple messages
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg1)
@@ -199,7 +201,7 @@ defmodule EchoPubSubTest do
     refute_peer_receive peer2, :msg1
 
     # Allow messages again
-    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
 
     # All messages should be received after retry
     assert_peer_receive peer2, :msg1
@@ -209,7 +211,7 @@ defmodule EchoPubSubTest do
 
   test "message delivery succeeds after multiple retry cycles", %{peer1: peer1, peer2: peer2} do
     # Make peer2's worker reject messages
-    remote_run peer2, do: Application.put_env(:msg, :val, :error)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
 
     # Send a message
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :persistent_retry_msg)
@@ -219,10 +221,32 @@ defmodule EchoPubSubTest do
     refute_peer_receive peer2, :persistent_retry_msg
 
     # Allow messages again
-    remote_run peer2, do: Application.put_env(:msg, :val, :ok)
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
 
     # Message should be received after next retry
     assert_peer_receive peer2, :persistent_retry_msg
+  end
+
+  test "flush path expires a lagging node instead of replaying overwritten messages",
+       %{peer1: peer1, peer2: peer2} do
+    node = peer1.node
+
+    # Reject deliveries so peer2's read cursor stays pinned at 0 while writes continue.
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+
+    # buffer_size is 10; 12 messages push peer2's pinned cursor off the ring buffer.
+    remote_run peer1 do
+      for i <- 1..12 do
+        Phoenix.PubSub.broadcast!(PubSubTest, "topic", {:overflow, i})
+      end
+    end
+
+    # Recover. The flush path must signal expiry, not replay the overwritten slots
+    # (which would surface as the wrapped-around {:overflow, 11} appearing first).
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+    refute_peer_receive peer2, {:overflow, 11}
   end
 
   test "logs warning when buffer reaches 40% capacity" do

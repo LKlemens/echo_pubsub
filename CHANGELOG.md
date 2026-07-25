@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.2 - 2026-06-15
+### Fixed
+- Detect ring-buffer expiry on the flush path, not just on node (re)join. When a
+  remote node lagged far enough that its unacked messages were overwritten (e.g.
+  during a sustained failure with replay), the producer would replay overwritten
+  slots - silently delivering wrong/duplicated messages and breaking the "no gaps"
+  guarantee. It now emits `[:echo_pubsub, :buffer, :expired]` and sends
+  `{:cursor_expired, node}` instead. An expired node is resumed at the current
+  write cursor so it is not re-expired on every subsequent flush.
+- Skip flushing a node that is already caught up, avoiding a spurious empty batch
+  that the worker rejected as a bad message (triggering a needless retry).
+- Guard the capacity-warning calculation against a zero-sized buffer.
+
+### Changed
+- Moved the test-only failure-injection hook out of the production worker code
+  path. It is now compiled in only under `Mix.env() == :test` and reads
+  `config :echo_pubsub, :fault_injection` (previously the generic `:msg`/`:val`
+  read on every batch in production).
+
 ## v0.1.1 - 2026-06-15
 ### Fixed
 - Stop duplicating messages on the broadcasting node. Local delivery is handled by
