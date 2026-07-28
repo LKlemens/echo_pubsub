@@ -9,6 +9,12 @@
   guarantee. It now emits `[:echo_pubsub, :buffer, :expired]` and sends
   `{:cursor_expired, node}` instead. An expired node is resumed at the current
   write cursor so it is not re-expired on every subsequent flush.
+- Ack and retry the `{:cursor_expired, node}` notice like a normal batch. It was
+  previously a raw `GenServer.call`: an unreachable peer at expiry time crashed the
+  producer (losing the buffer and every node's read cursor), and the lagging node's
+  cursor was advanced even if the notice never arrived - a silent gap. The cursor
+  now only advances once the peer acks, and a failed notice is retried on the next
+  flush.
 - Skip flushing a node that is already caught up, avoiding a spurious empty batch
   that the worker rejected as a bad message (triggering a needless retry).
 - Guard the capacity-warning calculation against a zero-sized buffer.

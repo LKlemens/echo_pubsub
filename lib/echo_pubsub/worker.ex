@@ -45,10 +45,28 @@ defmodule EchoPubSub.Worker do
           {:reply, :ok, state}
       end
     end
+
+    @impl true
+    def handle_call({:expired, node}, _from, state) do
+      case Application.get_env(:echo_pubsub, :fault_injection, :ok) do
+        :ok ->
+          broadcast_expired_message(state.pubsub, node)
+          {:reply, :ok, state}
+
+        _ ->
+          {:reply, :error, state}
+      end
+    end
   else
     @impl true
     def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
       deliver_batch(messages, from, state)
+      {:reply, :ok, state}
+    end
+
+    @impl true
+    def handle_call({:expired, node}, _from, state) do
+      broadcast_expired_message(state.pubsub, node)
       {:reply, :ok, state}
     end
   end
@@ -64,12 +82,6 @@ defmodule EchoPubSub.Worker do
   @impl true
   def handle_call({:registered?, node}, _from, state) do
     {:reply, MapSet.member?(state.registrations, node), state}
-  end
-
-  @impl true
-  def handle_call({:expired, node}, _from, state) do
-    broadcast_expired_message(state.pubsub, node)
-    {:reply, :ok, state}
   end
 
   @impl true

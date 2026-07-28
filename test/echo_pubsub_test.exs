@@ -249,6 +249,33 @@ defmodule EchoPubSubTest do
     refute_peer_receive peer2, {:overflow, 11}
   end
 
+  test "retries the expired notice until the remote worker accepts it",
+       %{peer1: peer1, peer2: peer2} do
+    node = peer1.node
+
+    # Reject everything on peer2 — batches AND the expired notice itself.
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+
+    # buffer_size is 10; 12 messages push peer2's pinned cursor off the ring buffer,
+    # so the flush path starts trying to deliver {:cursor_expired, node} and fails.
+    remote_run peer1 do
+      for i <- 1..12 do
+        Phoenix.PubSub.broadcast!(PubSubTest, "topic", {:overflow, i})
+      end
+    end
+
+    # The failed notice must not be dropped: nothing arrives while faults are on...
+    refute_peer_receive peer2, {:cursor_expired, ^node}
+
+    # ...and once the worker accepts calls again, the retried notice lands.
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+
+    # The producer survived the failing calls and resumed normal delivery.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_recovery)
+    assert_peer_receive peer2, :after_recovery
+  end
+
   test "logs warning when buffer reaches 40% capacity" do
     # buffer_size: 10, so 40% = 4 messages
     [peer1, peer2] = spawn_nodes(["warn_node1", "warn_node2"])

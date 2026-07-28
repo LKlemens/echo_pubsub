@@ -146,13 +146,7 @@ defmodule EchoPubSub.Producer do
     if cursor < oldest do
       # The node fell off the ring buffer; signal expiry instead of replaying
       # slots that newer writes have already overwritten.
-      :telemetry.execute(
-        [:echo_pubsub, :buffer, :expired],
-        %{count: 1, missed_messages: oldest - cursor},
-        %{group: state.group, node: node(pid)}
-      )
-
-      {send_expired(pid, state), :ok}
+      send_expired(pid, oldest - cursor, state)
     else
       %{read_cursors: read_cursors, write_cursor: write_cursor} = state
 
@@ -170,10 +164,24 @@ defmodule EchoPubSub.Producer do
   end
 
   # Tell the node to reload from a source of truth, then resume it at the current
-  # write cursor so we don't re-expire it on every subsequent flush.
-  defp send_expired(pid, state) do
-    GenServer.call(pid, {:expired, node()})
-    %{state | read_cursors: Map.put(state.read_cursors, node(pid), state.write_cursor)}
+  # write cursor so we don't re-expire it on every subsequent flush. The notice is
+  # acked and retried like a normal batch: an unreachable peer must not crash the
+  # producer, and a lost notice would be a silent gap — the exact failure this
+  # library exists to prevent. The cursor only advances once the peer confirms.
+  defp send_expired(pid, missed_messages, state) do
+    case safe_call(pid, {:expired, node()}, state.call_timeout, state) do
+      :ok ->
+        :telemetry.execute(
+          [:echo_pubsub, :buffer, :expired],
+          %{count: 1, missed_messages: missed_messages},
+          %{group: state.group, node: node(pid)}
+        )
+
+        {%{state | read_cursors: Map.put(state.read_cursors, node(pid), state.write_cursor)}, :ok}
+
+      :error ->
+        {state, :error}
+    end
   end
 
   defp get_message(cursor, state) do
