@@ -209,6 +209,27 @@ defmodule EchoPubSubTest do
     assert_peer_receive peer2, :msg3
   end
 
+  test "producer holds outgoing messages while the sending node is faulted", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # Fault the SENDING node: its producer must not deliver outward, the
+    # mirror of the receive-side tests above.
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :out1)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :out2)
+
+    # Nothing leaves peer1 while it is faulted - the batch stays buffered.
+    refute_peer_receive peer2, :out1
+
+    # Clear the fault; the buffered writes replay in order on the next retry.
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+
+    assert_peer_receive peer2, :out1
+    assert_peer_receive peer2, :out2
+  end
+
   test "message delivery succeeds after multiple retry cycles", %{peer1: peer1, peer2: peer2} do
     # Make peer2's worker reject messages
     remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)

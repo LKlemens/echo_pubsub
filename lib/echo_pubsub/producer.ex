@@ -3,6 +3,8 @@ defmodule EchoPubSub.Producer do
   use GenServer
   require Logger
 
+  alias EchoPubSub.FaultInjection
+
   def start_link(
         {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
          capacity_warning_interval, group}
@@ -217,7 +219,17 @@ defmodule EchoPubSub.Producer do
     end
   end
 
+  # Under an injected fault, outgoing sends short-circuit to :error so the batch
+  # stays buffered and replays on recovery - the send-side half of the partition.
   defp safe_call(pid, messages, call_timeout, _state) do
+    if FaultInjection.ok?() do
+      do_safe_call(pid, messages, call_timeout)
+    else
+      :error
+    end
+  end
+
+  defp do_safe_call(pid, messages, call_timeout) do
     case GenServer.call(pid, messages, call_timeout) do
       :ok -> :ok
       _ -> :error

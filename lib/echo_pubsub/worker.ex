@@ -2,14 +2,7 @@ defmodule EchoPubSub.Worker do
   @moduledoc false
   use GenServer
 
-  # Compiled in under the test env by default, so the failure-injection branch
-  # never ships in production builds. A consuming app can opt in explicitly with
-  # `config :echo_pubsub, :enable_fault_injection, true` (e.g. for demos).
-  @fault_injection Application.compile_env(
-                     :echo_pubsub,
-                     :enable_fault_injection,
-                     Mix.env() == :test
-                   )
+  alias EchoPubSub.FaultInjection
 
   def start_link({name, group}) do
     GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
@@ -27,47 +20,25 @@ defmodule EchoPubSub.Worker do
     {:reply, :ok, state}
   end
 
-  if @fault_injection do
-    @impl true
-    def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
-      state = %{state | last_batch: messages}
+  @impl true
+  def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
+    state = %{state | last_batch: messages}
 
-      case Application.get_env(:echo_pubsub, :fault_injection, :ok) do
-        :sleep ->
-          Process.sleep(6000)
-          {:reply, :error, state}
-
-        :error ->
-          {:reply, :error, state}
-
-        :ok ->
-          deliver_batch(messages, from, state)
-          {:reply, :ok, state}
-      end
-    end
-
-    @impl true
-    def handle_call({:expired, node}, _from, state) do
-      case Application.get_env(:echo_pubsub, :fault_injection, :ok) do
-        :ok ->
-          broadcast_expired_message(state.pubsub, node)
-          {:reply, :ok, state}
-
-        _ ->
-          {:reply, :error, state}
-      end
-    end
-  else
-    @impl true
-    def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
+    if FaultInjection.ok?() do
       deliver_batch(messages, from, state)
       {:reply, :ok, state}
+    else
+      {:reply, :error, state}
     end
+  end
 
-    @impl true
-    def handle_call({:expired, node}, _from, state) do
+  @impl true
+  def handle_call({:expired, node}, _from, state) do
+    if FaultInjection.ok?() do
       broadcast_expired_message(state.pubsub, node)
       {:reply, :ok, state}
+    else
+      {:reply, :error, state}
     end
   end
 
