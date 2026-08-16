@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.3 - 2026-08-16
+### Added
+- Bidirectional fault injection for simulating a network partition. Previously
+  only the worker rejected *incoming* batches; the producer now also
+  short-circuits *outgoing* sends under an injected fault, so a partitioned node
+  neither receives nor emits. Both directions keep the at-least-once/replay
+  semantics - messages stay buffered and replay in order on recovery, and holding
+  the fault long enough overflows the sender's own ring buffer, delivering
+  `{:cursor_expired, node}` to the peer.
+
+### Changed
+- Centralized the compile-time fault switch in a single `EchoPubSub.FaultInjection`
+  module (`ok?/0`), shared by the producer and worker instead of each carrying its
+  own gate and duplicated code paths. A consuming app opts in with
+  `config :echo_pubsub, :enable_fault_injection, true` (e.g. for demos).
+- Dropped the unused `:sleep` fault mode and removed leftover `dbg/1` calls from
+  the worker; the `:fault_injection` flag is now effectively boolean (`:ok`
+  delivers, anything else rejects).
+
 ## v0.1.2 - 2026-06-15
 ### Fixed
 - Detect ring-buffer expiry on the flush path, not just on node (re)join. When a
