@@ -355,4 +355,28 @@ defmodule EchoPubSubTest do
 
     refute log =~ "Buffer at"
   end
+
+  test "concurrent flush (default) delivers to every remote node", %{peer1: peer1, peer2: peer2} do
+    peer3 = spawn_node("node3", [peer1])
+    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    # peer1 -> 2 remote workers: the >= 2 case that takes the concurrent path.
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, true)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_on)
+
+    assert_peer_receive peer2, :concurrent_on
+    assert_peer_receive peer3, :concurrent_on
+  end
+
+  test "sequential flush (concurrency disabled) still delivers to every remote node",
+       %{peer1: peer1, peer2: peer2} do
+    peer3 = spawn_node("node3", [peer1])
+    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, false)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_off)
+
+    assert_peer_receive peer2, :concurrent_off
+    assert_peer_receive peer3, :concurrent_off
+  end
 end

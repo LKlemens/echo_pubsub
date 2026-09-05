@@ -5,6 +5,11 @@ defmodule EchoPubSub.Producer do
 
   alias EchoPubSub.FaultInjection
 
+  # The retry flag threaded through the fan-out reduces: did any remote send fail,
+  # so we must schedule a retry flush?
+  @no_failures false
+  @had_failure true
+
   def start_link(
         {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
          capacity_warning_interval, group}
@@ -74,9 +79,9 @@ defmodule EchoPubSub.Producer do
   @impl GenServer
   def handle_info({_ref, :join, _group, new_pids}, state) do
     {state, has_failure} =
-      Enum.reduce(new_pids, {state, false}, fn pid, {acc_state, acc_failure} ->
+      Enum.reduce(new_pids, {state, @no_failures}, fn pid, {acc_state, any_failure?} ->
         {new_state, status} = process_joined(pid, acc_state)
-        {new_state, acc_failure or status == :error}
+        {new_state, any_failure? or status == :error}
       end)
 
     state = if has_failure, do: schedule_retry_flush(state), else: state
@@ -108,12 +113,7 @@ defmodule EchoPubSub.Producer do
       pg_members(state.group)
       |> Enum.filter(&(node(&1) != node()))
 
-    {state, has_failure} =
-      Enum.reduce(remote_pids, {state, false}, fn pid, {acc_state, acc_failure} ->
-        cursor = Map.get(acc_state.read_cursors, node(pid), 0)
-        {new_state, status} = send_messages(pid, cursor, acc_state)
-        {new_state, acc_failure or status == :error}
-      end)
+    {state, has_failure} = fan_out(remote_pids, state)
 
     # Advance local node cursor since local delivery is handled by Phoenix.PubSub dispatch
     state = %{state | read_cursors: Map.put(state.read_cursors, node(), state.write_cursor)}
@@ -121,6 +121,107 @@ defmodule EchoPubSub.Producer do
     state = %{state | flush_timer: nil}
     state = if has_failure, do: schedule_retry_flush(state), else: state
     {:noreply, state}
+  end
+
+  # Per-node sends are independent (each only advances its own read cursor over an
+  # immutable buffer snapshot), so >= 2 remotes fan out concurrently: sum of
+  # round-trips becomes the slowest one. Fewer, or disabled, stays sequential.
+  defp fan_out(remote_pids, state) do
+    if concurrent?() and length(remote_pids) >= 2 do
+      fan_out_concurrent(remote_pids, state)
+    else
+      fan_out_sequential(remote_pids, state)
+    end
+  end
+
+  defp fan_out_sequential(remote_pids, state) do
+    Enum.reduce(remote_pids, {state, @no_failures}, fn pid, {acc_state, _any_failure?} = acc ->
+      node = node(pid)
+      apply_verdict(node, deliver(pid, prepare_batch(node, acc_state), acc_state), acc)
+    end)
+  end
+
+  defp fan_out_concurrent(remote_pids, state) do
+    supervisor = Module.concat(state.group, TaskSupervisor)
+    call_timeout = state.call_timeout
+
+    # Prepare batches here (reads own heap; big payloads stay refc-shared) so tasks
+    # carry only message wrappers, never the whole ring buffer.
+    jobs =
+      Enum.map(remote_pids, fn pid ->
+        node = node(pid)
+        {pid, node, prepare_batch(node, state)}
+      end)
+
+    supervisor
+    |> Task.Supervisor.async_stream_nolink(
+      jobs,
+      fn {pid, node, batch} -> {node, deliver_batch(pid, batch, call_timeout)} end,
+      ordered: false,
+      max_concurrency: length(jobs),
+      timeout: :infinity
+    )
+    |> Enum.reduce({state, @no_failures}, fn
+      {:ok, {node, verdict}}, acc -> apply_verdict(node, verdict, acc)
+      # Task dies only on an unexpected bug (safe_call catches remote failures):
+      # keep the cursor, force a retry.
+      {:exit, _reason}, {acc_state, _any_failure?} -> {acc_state, @had_failure}
+    end)
+  end
+
+  defp concurrent?, do: Application.get_env(:echo_pubsub, :concurrent_flush, true)
+
+  # Pure: decide what this node needs. Runs in the producer (reads the buffer).
+  defp prepare_batch(node, state) do
+    next_needed = Map.get(state.read_cursors, node, 0)
+    oldest_buffered = max(state.write_cursor - :array.size(state.buffer), 0)
+
+    cond do
+      # Node has acked everything written - nothing to send.
+      next_needed >= state.write_cursor -> :caught_up
+      # Node's next message was overwritten in the ring - can't replay without a gap.
+      next_needed < oldest_buffered -> {:expired, oldest_buffered - next_needed}
+      # Node is behind but its messages are still buffered - replay the gap in order.
+      true -> {:messages, messages_since(next_needed, state)}
+    end
+  end
+
+  # Remote call carrying no buffer, so it is safe in a task. Returns a verdict.
+  defp deliver(pid, batch, state), do: deliver_batch(pid, batch, state.call_timeout)
+
+  defp deliver_batch(_pid, :caught_up, _call_timeout), do: :ok
+
+  defp deliver_batch(pid, {:expired, missed}, call_timeout) do
+    case safe_call(pid, {:expired, node()}, call_timeout, nil) do
+      :ok -> {:expired, missed}
+      :error -> :expired_failed
+    end
+  end
+
+  defp deliver_batch(pid, {:messages, messages}, call_timeout) do
+    case safe_call(pid, messages, call_timeout, nil) do
+      :ok -> :ok
+      :error -> {:failed, length(messages)}
+    end
+  end
+
+  # Fold a verdict into state + telemetry (producer only). Cursor advances only on ack.
+  defp apply_verdict(node, :ok, {state, failure}), do: {advance(state, node), failure}
+
+  defp apply_verdict(node, {:expired, missed}, {state, failure}) do
+    emit_expired(state.group, node, missed)
+    {advance(state, node), failure}
+  end
+
+  defp apply_verdict(node, {:failed, batch_size}, {state, _failure}) do
+    emit_sync_failure(state.group, node, batch_size)
+    {state, @had_failure}
+  end
+
+  defp apply_verdict(_node, :expired_failed, {state, _failure}), do: {state, @had_failure}
+
+  defp advance(state, node) do
+    %{state | read_cursors: Map.put(state.read_cursors, node, state.write_cursor)}
   end
 
   defp process_joined(pid, state) do
@@ -134,56 +235,27 @@ defmodule EchoPubSub.Producer do
     end
   end
 
+  # Replay a rejoined node via the shared prepare/deliver path, so join and flush
+  # stay in lock-step. Expiry is acked and retried like a batch: a lost notice
+  # would be a silent gap, the exact failure this library prevents.
   defp resume(pid, node, state) do
-    send_messages(pid, Map.get(state.read_cursors, node, 0), state)
+    {new_state, failure} =
+      apply_verdict(node, deliver(pid, prepare_batch(node, state), state), {state, @no_failures})
+
+    {new_state, if(failure, do: :error, else: :ok)}
   end
 
-  # Already caught up - nothing to send. Guards against sending an empty batch
-  # (which the worker would reject as a bad message) on a redundant flush.
-  defp send_messages(_pid, cursor, %{write_cursor: cursor} = state), do: {state, :ok}
-
-  defp send_messages(pid, cursor, state) do
-    oldest = max(state.write_cursor - :array.size(state.buffer), 0)
-
-    if cursor < oldest do
-      # The node fell off the ring buffer; signal expiry instead of replaying
-      # slots that newer writes have already overwritten.
-      send_expired(pid, oldest - cursor, state)
-    else
-      %{read_cursors: read_cursors, write_cursor: write_cursor} = state
-
-      messages = Enum.map(cursor..(write_cursor - 1)//1, &get_message(&1, state))
-
-      case safe_call(pid, messages, state.call_timeout, state) do
-        :ok ->
-          {%{state | read_cursors: Map.put(read_cursors, node(pid), write_cursor)}, :ok}
-
-        :error ->
-          emit_sync_failure(state.group, node(pid), length(messages))
-          {state, :error}
-      end
-    end
+  defp emit_expired(group, node, missed_messages) do
+    :telemetry.execute(
+      [:echo_pubsub, :buffer, :expired],
+      %{count: 1, missed_messages: missed_messages},
+      %{group: group, node: node}
+    )
   end
 
-  # Tell the node to reload from a source of truth, then resume it at the current
-  # write cursor so we don't re-expire it on every subsequent flush. The notice is
-  # acked and retried like a normal batch: an unreachable peer must not crash the
-  # producer, and a lost notice would be a silent gap — the exact failure this
-  # library exists to prevent. The cursor only advances once the peer confirms.
-  defp send_expired(pid, missed_messages, state) do
-    case safe_call(pid, {:expired, node()}, state.call_timeout, state) do
-      :ok ->
-        :telemetry.execute(
-          [:echo_pubsub, :buffer, :expired],
-          %{count: 1, missed_messages: missed_messages},
-          %{group: state.group, node: node(pid)}
-        )
-
-        {%{state | read_cursors: Map.put(state.read_cursors, node(pid), state.write_cursor)}, :ok}
-
-      :error ->
-        {state, :error}
-    end
+  # Messages from `cursor` up to (but not including) the write cursor, in order.
+  defp messages_since(cursor, state) do
+    Enum.map(cursor..(state.write_cursor - 1)//1, &get_message(&1, state))
   end
 
   defp get_message(cursor, state) do

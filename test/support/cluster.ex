@@ -135,11 +135,15 @@ defmodule EchoPubSub.Cluster do
     batch_interval = Keyword.get(opts, :batch_interval, 0)
     capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
     capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
+    buffer_size = Keyword.get(opts, :buffer_size, 10)
+    pool_size = Keyword.get(opts, :pool_size, 1)
 
     remote_run %{pid: pid},
       batch_interval: batch_interval,
       capacity_warning_threshold: capacity_warning_threshold,
-      capacity_warning_interval: capacity_warning_interval do
+      capacity_warning_interval: capacity_warning_interval,
+      buffer_size: buffer_size,
+      pool_size: pool_size do
       parent = self()
 
       spawn(fn ->
@@ -147,8 +151,8 @@ defmodule EchoPubSub.Cluster do
           {Phoenix.PubSub,
            name: PubSubTest,
            adapter: EchoPubSub,
-           pool_size: 1,
-           buffer_size: 10,
+           pool_size: pool_size,
+           buffer_size: buffer_size,
            batch_interval: batch_interval,
            capacity_warning_threshold: capacity_warning_threshold,
            capacity_warning_interval: capacity_warning_interval},

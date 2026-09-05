@@ -35,6 +35,15 @@ defmodule EchoPubSub do
 
   Options passed directly to the supervisor take precedence over config values.
 
+  ### Concurrent fan-out
+
+  Each flush delivers to remote nodes concurrently (one task per node), so it costs
+  the slowest round-trip instead of their sum. On by default, engaging at 2+ remote
+  peers. Disable with:
+
+      # config/config.exs
+      config :echo_pubsub, concurrent_flush: false
+
   ## Implementation
 
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once
@@ -135,6 +144,10 @@ defmodule EchoPubSub do
         producer_id = Module.concat(group, :Producer)
 
         [
+          Supervisor.child_spec(
+            {Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
+            id: Module.concat(group, :TaskSupervisor)
+          ),
           Supervisor.child_spec(
             {Producer,
              {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
