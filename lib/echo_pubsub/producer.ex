@@ -1,9 +1,42 @@
 defmodule EchoPubSub.Producer do
   @moduledoc false
   use GenServer
+  use TypedStruct
   require Logger
 
   alias EchoPubSub.FaultInjection
+
+  @type cursor :: non_neg_integer()
+  @type group :: atom()
+
+  @typedoc """
+  Producer GenServer state.
+
+  Fields:
+
+    * `group` - the `:pg` group this producer delivers to (its delivery scope)
+    * `write_cursor` - count of messages ever written; the next write lands here
+    * `read_cursors` - map of node to its next-needed cursor; everything below it that node has acked
+    * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
+    * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
+    * `call_timeout` - timeout in milliseconds for synchronous calls to remote nodes
+    * `capacity_warning_threshold` - buffer fill ratio (0.0-1.0) that triggers a capacity warning
+    * `capacity_warning_interval` - minimum seconds between capacity warnings
+    * `flush_timer` - reference of the pending flush timer, or `nil` when none is scheduled
+    * `last_capacity_warning_at` - monotonic seconds of the last capacity warning, or `nil` if never
+  """
+  typedstruct enforce: true do
+    field(:group, group())
+    field(:write_cursor, cursor(), default: 0)
+    field(:read_cursors, %{node() => cursor()})
+    field(:buffer, :array.array())
+    field(:batch_interval, timeout())
+    field(:call_timeout, timeout())
+    field(:capacity_warning_threshold, float())
+    field(:capacity_warning_interval, non_neg_integer())
+    field(:flush_timer, reference() | nil, enforce: false)
+    field(:last_capacity_warning_at, integer() | nil, enforce: false)
+  end
 
   # The retry flag threaded through the fan-out reduces: did any remote send fail,
   # so we must schedule a retry flush?
@@ -43,7 +76,7 @@ defmodule EchoPubSub.Producer do
 
     Enum.each(pids, &GenServer.call(&1, {:register, node()}))
 
-    state = %{
+    state = %__MODULE__{
       group: group,
       write_cursor: 0,
       read_cursors: Map.new(pids, &{node(&1), 0}),
@@ -263,7 +296,7 @@ defmodule EchoPubSub.Producer do
     :array.get(i, state.buffer)
   end
 
-  defp maybe_start_flush_timer(%{batch_interval: 0} = state) do
+  defp maybe_start_flush_timer(%__MODULE__{batch_interval: 0} = state) do
     send(self(), :flush_all)
     state
   end
