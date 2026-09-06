@@ -10,81 +10,39 @@ This means that nodes can disconnect temporarily from the cluster - even for a b
 
 See the [Docs](https://hexdocs.pm/echo_pubsub/EchoPubSub.html) for more information.
 
-## The Problem: messages lost during temporary network problems
+## How it works
 
-The default `Phoenix.PubSub.PG2` adapter is **fire-and-forget**. When a node
-broadcasts, the message is delivered to the nodes that are connected *at that
-moment*. There is no buffer and no acknowledgement - if a node is unreachable
-when the broadcast happens, the message is simply gone for that node.
+`Phoenix.PubSub.PG2` is fire-and-forget: a broadcast reaches only the nodes
+connected at that instant. A blip as short as ~1ms silently drops messages for any
+node briefly unreachable.
 
-Even a momentary network problem - a blip lasting as little as 1ms - means
-silent data loss for any message broadcast during it:
+EchoPubSub makes delivery **at-least-once**:
 
-```
-        Node A (broadcaster)            Node B (disconnected)
-        ────────────────────            ────────────────────
-  t0    broadcast msg 1   ───────────▶  received msg 1
-  t1    ┌─ network blip (e.g. ~1ms): B drops out ─┐
-  t2    broadcast msg 2   ──────✗               (never arrives)
-  t3    broadcast msg 3   ──────✗               (never arrives)
-  t4    └─ B reconnects ────────────────────────┘
-  t5    broadcast msg 4   ───────────▶  received msg 4
-```
+- **Buffer + cursors** - each broadcaster keeps a ring buffer of recent messages,
+  plus a per-node read cursor that advances only on an acked delivery.
 
-When B comes back at `t4` it carries on as if nothing happened: it has
-**no idea** that msg 2 and msg 3 ever existed. There is no error, no gap
-detection - just a hole in the stream. For anything that relies on the message
-stream being complete (replicated caches, event logs, derived state), this
-quietly corrupts B's view of the world.
+- **Replay on reconnect** - a reconnecting node is replayed exactly the messages
+  it missed, in order.
 
-## How EchoPubSub solves it
+- **Told if it fell behind** - if it stayed gone long enough that those messages
+  were overwritten in the bounded buffer, it gets `{:cursor_expired, node_name}`
+  (see [Usage](#usage)) telling it to reload from a source of truth.
 
-EchoPubSub upgrades delivery from fire-and-forget to **at-least-once** by having
-each broadcasting node remember what it has sent and to whom:
+**Core guarantee: either you receive every message in order, or you are told you
+fell behind** - never a silent gap.
 
-- **Ring buffer of recent messages** - every producer keeps the last
-  `:buffer_size` messages in memory, each stamped with a monotonically
-  increasing *write cursor*.
-- **Per-node read cursors** - the producer tracks how far each remote node has
-  acknowledged. Remote delivery is a synchronous, acked call; a node's cursor
-  only advances once it confirms receipt.
-- **Replay on reconnect** - when a briefly disconnected node rejoins, the producer sees
-  its read cursor is behind the write cursor and replays exactly the messages it
-  missed, in order, before resuming normal flow.
-
-Applied to the scenario above, B's cursor stays at msg 1 while it is
-disconnected. On reconnect the producer replays msg 2 and msg 3, so B catches up
-with **no gaps** before msg 4 arrives:
-
-```
-        Node A (broadcaster)            Node B (disconnected)
-        ────────────────────            ────────────────────
-  t0    broadcast msg 1   ───────────▶  received msg 1   (B cursor → 1)
-  t1    ┌─ network blip (e.g. ~1ms): B drops out ─┐
-  t2    broadcast msg 2     buffered             (B cursor stuck at 1)
-  t3    broadcast msg 3     buffered             (B cursor stuck at 1)
-  t4    └─ B reconnects ────────────────────────┘
-  t4'   replay msg 2, 3   ───────────▶  received msg 2, 3 (B cursor → 3)
-  t5    broadcast msg 4   ───────────▶  received msg 4    (B cursor → 4)
-```
-
-### When the buffer can't cover the gap
-
-The buffer is bounded, so a node that stays gone long enough that its missed
-messages get overwritten by newer writes cannot be replayed without gaps.
-Rather than silently delivering a corrupted stream, EchoPubSub gives up on
-replay *explicitly*: it sends the subscribing process a
-`{:cursor_expired, node_name}` message (see [Usage](#usage)) so the application
-can recover to a valid state - typically by reloading from a source of truth
-such as the database or another node.
-
-This is the core guarantee: **either you receive every message in order, or you
-are told that you fell behind.** There are never silent gaps - receipt of
-message 3 guarantees you have already received messages 1 and 2.
+See [how it works](docs/how-it-works.md) for diagrams, the cursor internals, and
+failure scenarios.
 
 ## Usage
 
 *Note: I used LLM for typing - but ideas and decisions were mine*
+
+> **Not a drop-in replacement for Phoenix.PubSub.** At-least-once delivery costs
+> more than fire-and-forget (buffering, acked cross-node calls). Keep the default
+> PubSub for ordinary broadcasts and run EchoPubSub *alongside* it, using it only
+> for cross-node data that must not be lost (replicated caches, event logs,
+> derived state).
 
 
 ```elixir
@@ -95,9 +53,15 @@ def deps do
 end
 
 # application.ex
+Both children default to the same child id (`Phoenix.PubSub.Supervisor`), so give each a distinct `id:`:
+
+```elixir
 children = [
-  # ...,
-  {Phoenix.PubSub, name: MyApp.PubSub, adapter: EchoPubSub}
+  Supervisor.child_spec({Phoenix.PubSub, name: MyApp.PubSub}, id: MyApp.PubSub),
+  Supervisor.child_spec(
+    {Phoenix.PubSub, name: MyApp.EchoPubSub, adapter: EchoPubSub},
+    id: MyApp.EchoPubSub
+  )
 ]
 ```
 
@@ -108,6 +72,7 @@ Option                  | Description                                           
 `:name`                 | The required name to register the PubSub processes, ie: `MyApp.PubSub`    |                |
 `:pool_size`            | Determines the number of workers and producers on each node               | 1              |
 `:buffer_size`          | The numbers of messages to hold in memory for each producer in the pool   | 10_000         |
+`:batch_interval`       | Milliseconds to batch writes before a flush; `0` flushes immediately      | 200            |
 
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
 has been disconnected long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
