@@ -207,14 +207,18 @@ defmodule EchoPubSub.Producer do
   # Pure: decide what this node needs. Runs in the producer (reads the buffer).
   defp prepare_batch(node, state) do
     next_needed = Map.get(state.read_cursors, node, 0)
-    oldest_buffered = max(state.write_cursor - :array.size(state.buffer), 0)
+    buffer_size = :array.size(state.buffer)
+    # How many messages this node is behind. Read cursor only advances *to*
+    # write_cursor, so lag is always >= 0.
+    lag = state.write_cursor - next_needed
 
     cond do
-      # Node has acked everything written - nothing to send.
-      next_needed >= state.write_cursor -> :caught_up
-      # Node's next message was overwritten in the ring - can't replay without a gap.
-      next_needed < oldest_buffered -> {:expired, oldest_buffered - next_needed}
-      # Node is behind but its messages are still buffered - replay the gap in order.
+      # Acked everything written - nothing to send.
+      lag == 0 -> :caught_up
+      # Behind by more than the buffer holds - the oldest (lag - buffer_size)
+      # messages were overwritten and can't be replayed without a gap.
+      lag > buffer_size -> {:expired, lag - buffer_size}
+      # Behind but the whole gap is still buffered - replay it in order.
       true -> {:messages, messages_since(next_needed, state)}
     end
   end
