@@ -34,15 +34,31 @@ fell behind** - never a silent gap.
 See [how it works](docs/how-it-works.md) for diagrams, the cursor internals, and
 failure scenarios.
 
+## When to use it
+
+EchoPubSub gives you at-least-once cross-node delivery **without standing up a
+dedicated message broker**. If you already run a BEAM cluster, you reuse it - no
+extra service to deploy, secure, monitor, or scale.
+
+A good fit for small-to-mid projects that need reliable cross-node messaging but
+don't want the operational burden of Kafka / RabbitMQ / NATS:
+
+- **Replicated in-memory caches** - a missed invalidation means a node serves
+  stale data forever. EchoPubSub replays it on reconnect, or sends
+  `{:cursor_expired, node}` to trigger a reload - never a silent stale node.
+- **Event logs / projections / derived state** kept in sync across nodes.
+- **Presence / state fan-out** where a dropped update corrupts a peer's view.
+- Anything currently on plain `Phoenix.PubSub` that quietly breaks during network
+  blips.
+
+**When to reach for a real broker instead:** durable persistence across a full
+cluster restart, replay from disk / long retention, cross-language consumers,
+huge backlogs, or delivery to non-BEAM systems. EchoPubSub's buffer is in-memory
+and bounded - it closes the network-blip gap, it is not a durable log.
+
 ## Usage
 
 *Note: I used LLM for typing - but ideas and decisions were mine*
-
-> **Not a drop-in replacement for Phoenix.PubSub.** At-least-once delivery costs
-> more than fire-and-forget (buffering, acked cross-node calls). Keep the default
-> PubSub for ordinary broadcasts and run EchoPubSub *alongside* it, using it only
-> for cross-node data that must not be lost (replicated caches, event logs,
-> derived state).
 
 
 ```elixir
@@ -51,6 +67,14 @@ def deps do
     {:echo_pubsub, "~> 0.1.0"}
   ]
 end
+```
+
+> **Not a drop-in replacement for Phoenix.PubSub.** At-least-once delivery costs
+> more than fire-and-forget (buffering, acked cross-node calls). Keep the default
+> PubSub for ordinary broadcasts and run EchoPubSub *alongside* it, using it only
+> for cross-node data that must not be lost (replicated caches, event logs,
+> derived state).
+
 
 # application.ex
 Both children default to the same child id (`Phoenix.PubSub.Supervisor`), so give each a distinct `id:`:
