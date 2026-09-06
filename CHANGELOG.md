@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.4 - 2026-09-06
+### Added
+- Concurrent fan-out: each flush delivers to remote nodes in parallel (one task
+  per node via a `Task.Supervisor`), so a flush costs the slowest single
+  round-trip instead of the sum of all of them. On by default and engaging at 2+
+  remote peers; disable with `config :echo_pubsub, concurrent_flush: false`.
+- Guides: `docs/how-it-works.md` (cursor internals, flush decision, failure
+  scenarios, duplicate handling); README rewritten with
+  "When to use it", "Caveats", and the run-alongside-Phoenix.PubSub setup.
+
+### Changed
+- The producer GenServer state is now a typed struct with a documented `t()`
+  (compile-time-only `typed_struct` dependency), replacing the raw map.
+
 ## v0.1.3 - 2026-08-16
 ### Added
 - Bidirectional fault injection for simulating a network partition. Previously
