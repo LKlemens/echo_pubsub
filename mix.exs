@@ -24,7 +24,13 @@ defmodule EchoPubSub.MixProject do
       docs: [
         # The main page in the docs
         main: "EchoPubSub",
-        extras: ["README.md", "CHANGELOG.md", "LICENSE"],
+        extras: [
+          "README.md",
+          "docs/how-it-works.md",
+          "docs/benchmarks.md",
+          "CHANGELOG.md",
+          "LICENSE"
+        ],
         source_ref: "v#{@version}"
       ],
       package: [
@@ -50,6 +56,7 @@ defmodule EchoPubSub.MixProject do
     [
       {:phoenix_pubsub, "~> 2.0"},
       {:telemetry, "~> 1.0"},
+      {:typed_struct, "~> 0.3", runtime: false},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
