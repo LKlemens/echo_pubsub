@@ -200,3 +200,56 @@ So correctness is effectively unbounded.
   `config :echo_pubsub, concurrent_flush: false`.
 - **Retry.** Any failed send leaves that node's cursor untouched and schedules a
   retry flush, so the unacknowledged messages are redelivered.
+
+## Handling duplicate deliveries
+
+At-least-once delivery means a message can arrive **more than once**. The producer
+advances a node's read cursor only once it receives the delivery `ack`. If the
+message was received and handled successfully but the `ack` was lost on the way
+back - the cursor does not advance, so the same message is re-sent on the next
+flush. There is no way to distinguish "message lost" from "ack lost", so the safe
+choice is always to resend; consumers must therefore tolerate duplicates.
+
+There are two common ways to make that safe.
+
+### 1. Make handling idempotent - send state, not deltas
+
+If applying a message twice yields the same result, a duplicate is harmless.
+Prefer broadcasting absolute values over incremental ones:
+
+```elixir
+# idempotent: applying it twice leaves the balance at 100
+Phoenix.PubSub.broadcast(MyApp.EchoPubSub, "acct:1", {:balance, 100})
+
+# NOT idempotent: a redelivery adds 10 twice
+Phoenix.PubSub.broadcast(MyApp.EchoPubSub, "acct:1", {:add_balance, 10})
+```
+
+The same idea covers cache invalidation ("key X is now V" is safe to reapply) and
+presence/state fan-out (broadcast the full state, not a diff).
+
+### 2. Dedupe by message id
+
+When the payload is genuinely an event that can't be made idempotent, stamp each
+message with a unique id and skip ids you have already handled:
+
+```elixir
+# publisher
+Phoenix.PubSub.broadcast(MyApp.EchoPubSub, "events", {:event, System.unique_integer([:positive]), payload})
+
+# subscriber
+def handle_info({:event, id, payload}, state) do
+  if MapSet.member?(state.seen, id) do
+    {:noreply, state}                                   # duplicate - ignore
+  else
+    apply_event(payload)
+    {:noreply, %{state | seen: MapSet.put(state.seen, id)}}
+  end
+end
+```
+
+Bound the `seen` set so it does not grow forever - an LRU, a ring of recent ids,
+or a time window (duplicates only ever arrive close together, on the retry after a
+lost ack, so a short window is enough). For ids that must be unique across nodes,
+use something like `{node(), System.unique_integer([:positive])}` or a UUID rather
+than a bare integer.

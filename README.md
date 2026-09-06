@@ -4,7 +4,7 @@
 [![hex.pm version](https://img.shields.io/hexpm/v/echo_pubsub.svg)](https://hex.pm/packages/echo_pubsub)
 [![hex.pm license](https://img.shields.io/hexpm/l/echo_pubsub.svg)](https://github.com/LKlemens/echo_pubsub/blob/main/LICENSE)
 
-A Phoenix.PubSub adapter that distributes messages between nodes using the erlang `:pg` module, like the default adapter, however with the additional guarentees of "at least once" delivery. 
+A Phoenix.PubSub adapter that distributes messages between nodes using the erlang `:pg` module, like the default adapter, however with the additional guarentees of "at least once" delivery.
 
 This means that nodes can disconnect temporarily from the cluster - even for a blip as short as ~1ms - and then "catch up" when they rejoin, thanks to a buffer of messages and read cursors.
 
@@ -56,6 +56,15 @@ cluster restart, replay from disk / long retention, cross-language consumers,
 huge backlogs, or delivery to non-BEAM systems. EchoPubSub's buffer is in-memory
 and bounded - it closes the network-blip gap, it is not a durable log.
 
+## Caveats
+
+**At-least-once means possibly-more-than-once.** If a message is delivered and
+handled but its `ack` is lost, the cursor doesn't advance and the message is re-sent
+- so a handler can see the same message twice. Make handlers tolerate duplicates:
+send absolute state rather than deltas, or dedupe by a per-message id. See
+[handling duplicate deliveries](docs/how-it-works.md#handling-duplicate-deliveries)
+for worked examples.
+
 ## Usage
 
 *Note: I used LLM for typing - but ideas and decisions were mine*
@@ -76,10 +85,12 @@ end
 > derived state).
 
 
-# application.ex
-Both children default to the same child id (`Phoenix.PubSub.Supervisor`), so give each a distinct `id:`:
+Add it to your supervision tree. Running EchoPubSub *alongside* your existing
+default PubSub, both children default to the same child id (that of the
+`Phoenix.PubSub` supervisor), so give each a distinct `id:`:
 
 ```elixir
+# application.ex
 children = [
   Supervisor.child_spec({Phoenix.PubSub, name: MyApp.PubSub}, id: MyApp.PubSub),
   Supervisor.child_spec(
