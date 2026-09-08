@@ -1,0 +1,17 @@
+# fly launch --no-deploy --copy-config --name echo-pubsub-bench   (then edit as below)
+app = "echo-pubsub-bench"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# No [[services]] — the cluster is internal-only over 6PN.
+
+[env]
+  POOL_SIZE = "1"
+  BUFFER_SIZE = "200000"
+  BATCH_INTERVAL = "100"
+
+[[vm]]
+  size = "performance-4x"
+  memory = "8gb"
