@@ -56,10 +56,10 @@ Same benchmark across real machines. On one box everything is CPU/copy bound; on
 real cluster delivery is network-latency bound, which is where `concurrent_flush`
 and `pool_size` earn their keep.
 
-> Run the `fly` commands from `bench/fly/` (it holds `fly.toml`). The one
-> exception is `fly deploy`: its Docker build context must be the **repo root**
-> (the `Dockerfile` copies `mix.exs`, `lib/`, `rel/`), so it takes an explicit
-> `--config`/`--dockerfile` path — see the block below.
+> Run every command below from the **repo root**. Each `fly` command takes
+> `-c bench/fly/fly.toml`, which also identifies the app (via its `app =` line).
+> `fly deploy` additionally needs `--dockerfile` and the root build context
+> (the `Dockerfile` copies `mix.exs`, `lib/`, `rel/`).
 
 ### What's here
 
@@ -75,23 +75,19 @@ Deploy-time knobs are env in `fly/fly.toml`: `POOL_SIZE`, `BUFFER_SIZE`, `BATCH_
 ### Deploy
 
 ```sh
-# from bench/fly/ (holds fly.toml)
-fly launch --no-deploy --copy-config --name echo-pubsub-bench   # once
-fly secrets set RELEASE_COOKIE="$(openssl rand -base64 24)"
+fly launch --no-deploy --copy-config --name echo-pubsub-bench   # once, bootstraps fly.toml
+fly secrets set -c bench/fly/fly.toml RELEASE_COOKIE="$(openssl rand -base64 24)"
 
-# from the repo root — build context must include mix.exs, lib/, rel/
 # --ha=false stops Fly auto-creating a passive standby machine (see Notes)
-fly deploy --ha=false --config bench/fly/fly.toml --dockerfile bench/fly/Dockerfile
+fly deploy --ha=false -c bench/fly/fly.toml --dockerfile bench/fly/Dockerfile
 
-# from bench/fly/
-fly scale count 3        # N *active* machines
+fly scale count 3 -c bench/fly/fly.toml        # N *active* machines
 ```
 
 ### Run
 
 ```sh
-# from bench/fly/
-fly ssh console
+fly ssh console -c bench/fly/fly.toml
 /app/bin/echo_pubsub rpc 'IO.inspect(Node.list())'             # wait for a 2-element list (N-1 peers) => 3-node cluster
 /app/bin/echo_pubsub rpc 'EchoPubSub.Bench.Runner.run(messages: 100_000, payload: 10)'
 ```
@@ -100,14 +96,13 @@ fly ssh console
 discovered every peer yet, so wait a few seconds and retry.
 
 Prints e.g. `nodes=3 payload=1024 msg/s=... delivered=true overflow=0`.
-Change node count with `fly scale count N`; batch/pool via `fly secrets`/`fly.toml`
-env then redeploy.
+Change node count with `fly scale count N -c bench/fly/fly.toml`; batch/pool via
+`fly secrets`/`fly.toml` env then redeploy.
 
 ### Stop (avoid cost)
 
 ```sh
-# from bench/fly/
-fly scale count 0
+fly scale count 0 -c bench/fly/fly.toml
 ```
 
 ### Notes
