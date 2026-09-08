@@ -12,6 +12,7 @@ defmodule EchoPubSub.MixProject do
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
+      releases: [echo_pubsub: [include_executables_for: [:unix]]],
       dialyzer: [
         plt_local_path: "priv/plts",
         plt_core_path: "priv/plts",
@@ -41,15 +42,19 @@ defmodule EchoPubSub.MixProject do
     ]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "bench/fly"]
+  defp elixirc_paths(:bench), do: ["lib", "bench/fly"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
+  # The :bench release (Fly cluster) starts the bench app; the published library
+  # never does — it stays a plain adapter.
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    [extra_applications: [:logger]] ++ bench_mod(Mix.env())
   end
+
+  defp bench_mod(:bench), do: [mod: {EchoPubSub.Bench.App, []}]
+  defp bench_mod(_), do: []
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
@@ -57,6 +62,8 @@ defmodule EchoPubSub.MixProject do
       {:phoenix_pubsub, "~> 2.0"},
       {:telemetry, "~> 1.0"},
       {:typed_struct, "~> 0.3", runtime: false},
+      {:libcluster, "~> 3.3", only: [:bench]},
+      {:delta_crdt, "~> 0.6", only: [:dev, :test]},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
