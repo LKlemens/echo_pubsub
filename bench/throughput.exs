@@ -13,7 +13,7 @@
 #   BATCH_INTERVALS comma list of batch_intervals  (0,100)
 #   PAYLOAD_SIZES   comma list of payload bytes    (10,200)
 #   POOL_SIZE       producers/workers per node     (1)
-#   PUBLISHERS      concurrent sender processes    (POOL_SIZE; routing hashes on pid)
+#   PUBLISHERS      concurrent sender processes    (schedulers_online; hashes on pid)
 #
 # Runs = len(BATCH_INTERVALS) * len(PAYLOAD_SIZES) * NODES.
 # CAVEAT: peers share this machine's cores, so read the curve shape, not absolutes.
@@ -30,7 +30,7 @@ samples = env_int.("SAMPLES", "3")
 buffer_size = env_int.("BUFFER_SIZE", Integer.to_string(messages * 2))
 pool_size = env_int.("POOL_SIZE", "1")
 # Concurrent publisher processes; routing hashes on pid, so a pool needs >1 sender.
-publishers = env_int.("PUBLISHERS", Integer.to_string(pool_size))
+publishers = env_int.("PUBLISHERS", Integer.to_string(System.schedulers_online()))
 
 batch_intervals =
   System.get_env("BATCH_INTERVALS", "0,100")
@@ -79,6 +79,7 @@ run_case = fn batch_interval, payload_size, k ->
   # reused names across configs fail with "name ... seems to be in use".
   run_id = System.unique_integer([:positive])
   names = for i <- 1..k, do: "n#{run_id}_#{i}"
+
   nodes =
     Cluster.spawn_nodes(names,
       batch_interval: batch_interval,
@@ -93,10 +94,18 @@ run_case = fn batch_interval, payload_size, k ->
 
   subscriber_nodes = Enum.map(nodes, & &1.node)
   Enum.each(nodes, &Cluster.apply(&1, BenchCollector, :ensure_started, [topic]))
-  Process.sleep(300) # let :pg membership propagate before relying on fan-out
+  # let :pg membership propagate before relying on fan-out
+  Process.sleep(300)
 
   # Warmup (discarded) settles the VM and peer discovery.
-  :peer.call(publisher.pid, ThroughputBench, :run_e2e, [warmup, topic, payload, subscriber_nodes, publishers], call_timeout)
+  :peer.call(
+    publisher.pid,
+    ThroughputBench,
+    :run_e2e,
+    [warmup, topic, payload, subscriber_nodes, publishers],
+    call_timeout
+  )
+
   :peer.call(publisher.pid, ThroughputBench, :install_counters, [], call_timeout)
 
   results =

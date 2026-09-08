@@ -31,12 +31,11 @@ Var               | Meaning                                   | Default
 `BATCH_INTERVALS` | comma list of batch intervals (ms)        | `0,100`
 `PAYLOAD_SIZES`   | comma list of payload sizes (bytes)       | `10,200`
 `POOL_SIZE`       | producers/workers per node                | `1`
-`PUBLISHERS`      | concurrent sender processes (hash on pid) | `POOL_SIZE`
+`PUBLISHERS`      | concurrent sender processes (hash on pid) | `schedulers_online`
 
 The buffer defaults to `2 × MESSAGES` so a run never overflows; setting it below
-`MESSAGES` makes the harness warn that overflow is expected. `PUBLISHERS` should be
-`> 1` when `POOL_SIZE > 1`, since broadcast routing hashes on the sender pid — one
-sender only ever hits one producer.
+`MESSAGES` makes the harness warn that overflow is expected - you can increase
+buffer size to get rid of it.
 
 ```sh
 # e.g. sweep 1..8 nodes, compare batch intervals, fixed 1KB payload, pool of 4
@@ -90,14 +89,28 @@ fly scale count 3 -c bench/fly/fly.toml        # N *active* machines
 fly ssh console -c bench/fly/fly.toml
 /app/bin/echo_pubsub rpc 'IO.inspect(Node.list())'             # wait for a 2-element list (N-1 peers) => 3-node cluster
 /app/bin/echo_pubsub rpc 'EchoPubSub.Bench.Runner.run(messages: 100_000, payload: 10)'
+# defaults: messages 50_000, payload 10 B, publishers = schedulers_online, samples 3;
+# pool_size/buffer_size/batch_interval fall back to fly.toml env (1 / 200_000 / 100)
 ```
 
 `Node.list()` excludes the node you're on; a shorter list means DNSPoll hasn't
 discovered every peer yet, so wait a few seconds and retry.
 
-Prints e.g. `nodes=3 payload=1024 msg/s=... delivered=true overflow=0`.
-Change node count with `fly scale count N -c bench/fly/fly.toml`; batch/pool via
-`fly secrets`/`fly.toml` env then redeploy.
+Prints e.g. `nodes=3 payload=10 msg/s=... delivered=true overflow=0 [batch_interval: 0]`.
+
+`Runner.run/1` opts — all changeable per call, **no redeploy**:
+
+- `:messages`, `:payload` (bytes), `:publishers`, `:samples` — per run.
+- `:pool_size`, `:buffer_size`, `:batch_interval` — restart the PubSub on every
+  node in-process before measuring; omitted ones fall back to the `fly.toml` env.
+
+```sh
+# sweep batch_interval on the live cluster, no redeploy:
+/app/bin/echo_pubsub rpc 'EchoPubSub.Bench.Runner.run(messages: 50_000, payload: 10, batch_interval: 100)'
+/app/bin/echo_pubsub rpc 'EchoPubSub.Bench.Runner.run(messages: 10_000, payload: 10, batch_interval: 0)'
+```
+
+Change node count with `fly scale count N -c bench/fly/fly.toml`.
 
 ### Stop (avoid cost)
 
