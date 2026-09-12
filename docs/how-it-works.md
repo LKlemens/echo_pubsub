@@ -145,20 +145,20 @@ cursor is then advanced to 8 so it is not re-expired on the next flush.
 
 ## Scenarios
 
-**A new node joins mid-stream.** It is seeded at the current `write_cursor`, not
+- **A new node joins mid-stream.** It is seeded at the current `write_cursor`, not
 at 0. If `write_cursor` is 100000, the joiner's cursor becomes 100000, so it is
 immediately `:caught_up` - it gets no historical backlog, only future messages.
 (A cursor of 0 only happens at init, when `write_cursor` is also 0.)
 
-**A brief disconnect (blip).** The node's cursor stays put while it is gone. On
+- **A brief disconnect (blip).** The node's cursor stays put while it is gone. On
 rejoin the producer replays the buffered gap in order, then resumes - no gap, as
 in the diagram above.
 
-**A node falls too far behind.** Its missed messages are overwritten in the ring,
+- **A node falls too far behind.** Its missed messages are overwritten in the ring,
 so replay is impossible; it receives `{:cursor_expired, node}` and the application
 reloads from the database or another node.
 
-**A remote worker crashes.** The read cursor lives in the *producer's* state on the
+- **A remote worker crashes.** The read cursor lives in the *producer's* state on the
 broadcasting node, so the worker crashing does not touch it. Its supervisor
 restarts the worker, it re-joins the `:pg` group, and the producer - seeing the
 node is still known - resumes delivery from the stored cursor. Any batch that was
@@ -170,7 +170,7 @@ subscribers are new and only receive the buffered tail, so cold subscribers shou
 reload from a source of truth on startup - and if the gap outran the buffer,
 `:cursor_expired` fires anyway.)
 
-**A worker acks, then crashes (or crashes mid-batch).** The worker
+- **A worker acks, then crashes (or crashes mid-batch).** The worker
 `local_broadcast`s the whole batch to its subscribers *before* it replies `:ok`
 (the reply is the return of that synchronous call), so an ack means the messages
 are already in the local subscribers' mailboxes - there is no "acked but not
@@ -179,7 +179,7 @@ advances → the batch is replayed on rejoin. Crash *after* the reply → nothin
 the messages are already enqueued. So a mid-batch crash can **duplicate**
 (at-least-once), never drop - see [Handling duplicate deliveries](#handling-duplicate-deliveries).
 
-**The producer crashes.** On restart `init` resets `write_cursor` to 0 with an
+- **The producer crashes.** On restart `init` resets `write_cursor` to 0 with an
 empty buffer and re-registers with every worker. Each worker sees the node as
 *already registered* and broadcasts `:cursor_expired` to its local subscribers, so
 everyone reloads from a source of truth. Safe, with no silent gap.
