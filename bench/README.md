@@ -3,9 +3,9 @@
 Two harnesses for the same end-to-end delivery benchmark (publish N messages,
 wait until every node received all N, verify no loss):
 
-- **Local** (`throughput.exs`) — a single-machine cluster of `:peer` nodes. Fast to
+- **Local** (`throughput.exs`) - a single-machine cluster of `:peer` nodes. Fast to
   run, CPU/copy bound.
-- **Fly.io** (`fly/`) — real machines across regions, where delivery is
+- **Fly.io** (`fly/`) - real machines across regions, where delivery is
   network-latency bound.
 
 ## Run locally
@@ -46,7 +46,7 @@ NODES=8 BATCH_INTERVALS=0,100,200 PAYLOAD_SIZES=10 POOL_SIZE=4 PUBLISHERS=4 MIX_
 > core contention. Read the *shape* of the curve, not the absolute numbers.
 
 To visualise `bench/results.csv`, open `bench/throughput.livemd` in
-[Livebook](https://livebook.dev/) and run all cells — it renders accept-rate and
+[Livebook](https://livebook.dev/) and run all cells - it renders accept-rate and
 buffer-overflow charts with VegaLite.
 
 ## Run on Fly.io
@@ -62,12 +62,12 @@ and `pool_size` earn their keep.
 
 ### What's here
 
-- `fly/bench_app.ex` — `:bench` release app: libcluster (DNSPoll over
+- `fly/bench_app.ex` - `:bench` release app: libcluster (DNSPoll over
   `<app>.internal`), the EchoPubSub PubSub (`PubSubTest`), and a subscribed
   `BenchCollector`.
-- `fly/runner.ex` — `EchoPubSub.Bench.Runner.run/1`, triggered on one node.
-- `fly/throughput_bench.ex`, `fly/bench_collector.ex` — shared with the local harness.
-- `fly/Dockerfile`, `fly/fly.toml`, and repo-root `rel/env.sh.eex` — packaging.
+- `fly/runner.ex` - `EchoPubSub.Bench.Runner.run/1`, triggered on one node.
+- `fly/throughput_bench.ex`, `fly/bench_collector.ex` - shared with the local harness.
+- `fly/Dockerfile`, `fly/fly.toml`, and repo-root `rel/env.sh.eex` - packaging.
 
 Deploy-time knobs are env in `fly/fly.toml`: `POOL_SIZE`, `BUFFER_SIZE`, `BATCH_INTERVAL`.
 
@@ -98,10 +98,10 @@ discovered every peer yet, so wait a few seconds and retry.
 
 Prints e.g. `nodes=3 payload=10 msg/s=... delivered=true overflow=0 [batch_interval: 0]`.
 
-`Runner.run/1` opts — all changeable per call, **no redeploy**:
+`Runner.run/1` opts - all changeable per call, **no redeploy**:
 
-- `:messages`, `:payload` (bytes), `:publishers`, `:samples` — per run.
-- `:pool_size`, `:buffer_size`, `:batch_interval` — restart the PubSub on every
+- `:messages`, `:payload` (bytes), `:publishers`, `:samples` - per run.
+- `:pool_size`, `:buffer_size`, `:batch_interval` - restart the PubSub on every
   node in-process before measuring; omitted ones fall back to the `fly.toml` env.
 
 ```sh
@@ -124,7 +124,7 @@ fly scale count 0 -c bench/fly/fly.toml
 - All machines must share `RELEASE_COOKIE`.
 - If `Node.list()` is empty, give DNSPoll a few seconds or bump `polling_interval`.
 - Deploy with `--ha=false`. By default Fly adds a passive **standby** machine
-  (shown as `app†`, state `stopped`) that only boots on host failure — it counts
+  (shown as `app†`, state `stopped`) that only boots on host failure - it counts
   toward `scale count` but never clusters, so you silently run one node short.
   There's no `fly.toml` key for this; it's a deploy-time flag. To fix an existing
   one: `fly machine destroy <standby-id> --force` then redeploy with `--ha=false`.

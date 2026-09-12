@@ -5,7 +5,7 @@ primary_region = "fra"
 [build]
   dockerfile = "Dockerfile"
 
-# No [[services]] — the cluster is internal-only over 6PN.
+# No [[services]] - the cluster is internal-only over 6PN.
 
 [env]
   POOL_SIZE = "1"

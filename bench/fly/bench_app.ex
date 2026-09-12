@@ -68,7 +68,7 @@ defmodule EchoPubSub.Bench.App do
   end
 
   # PubSub + collector as one restartable subtree. rest_for_one so the collector
-  # (which subscribes in its init) is restarted after — and re-subscribes to — any
+  # (which subscribes in its init) is restarted after - and re-subscribes to - any
   # PubSub restart.
   defp pubsub_child(opts) do
     %{
