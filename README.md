@@ -8,7 +8,7 @@ A Phoenix.PubSub adapter that distributes messages between nodes using the erlan
 
 This means that nodes can disconnect temporarily from the cluster - even for a blip as short as ~1ms - and then "catch up" when they rejoin, thanks to a buffer of messages and read cursors.
 
-See the [Docs](https://hexdocs.pm/echo_pubsub/EchoPubSub.html) for more information.
+See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
 
 ## How it works
 
@@ -31,8 +31,8 @@ EchoPubSub makes delivery **at-least-once**:
 **Core guarantee: either you receive every message in order, or you are told you
 fell behind** - never a silent gap.
 
-See [how it works](docs/how-it-works.md) for diagrams, the cursor internals, and
-failure scenarios.
+See [how it works](https://echo-pubsub.hexdocs.pm/how-it-works.html) for diagrams,
+the cursor internals, and failure scenarios.
 
 ## When to use it
 
@@ -62,7 +62,7 @@ and bounded - it closes the network-blip gap, it is not a durable log.
 handled but its `ack` is lost, the cursor doesn't advance and the message is re-sent
 - so a handler can see the same message twice. Make handlers tolerate duplicates:
 send absolute state rather than deltas, or dedupe by a per-message id. See
-[handling duplicate deliveries](docs/how-it-works.md#handling-duplicate-deliveries)
+[handling duplicate deliveries](https://echo-pubsub.hexdocs.pm/how-it-works.html#handling-duplicate-deliveries)
 for worked examples.
 
 ## Usage
@@ -111,7 +111,7 @@ Option                  | Description                                           
 
 With `:pool_size > 1` there are independent producers and order/at-least-once is
 *per producer* (a broadcast routes by sender pid) - see
-[Pools and ordering](docs/how-it-works.md#pools-and-ordering).
+[Pools and ordering](https://echo-pubsub.hexdocs.pm/how-it-works.html#pools-and-ordering).
 
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
 has been disconnected long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
