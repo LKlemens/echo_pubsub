@@ -1,0 +1,11 @@
+# Editor / language-server caches (not needed in the Docker build context)
+.expert/
+.dexter/
+.elixir_ls/
+
+# Build artifacts and local-only dirs — the image builds fresh
+_build/
+deps/
+.git/
+doc/
+priv/plts/
