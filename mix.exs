@@ -27,7 +27,6 @@ defmodule EchoPubSub.MixProject do
         extras: [
           "README.md",
           "docs/how-it-works.md",
-          "docs/benchmarks.md",
           "CHANGELOG.md",
           "LICENSE"
         ],
