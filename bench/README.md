@@ -8,6 +8,47 @@ wait until every node received all N, verify no loss):
 - **Fly.io** (`fly/`) - real machines across regions, where delivery is
   network-latency bound.
 
+## How it works
+
+Every node runs the EchoPubSub `PubSubTest` (a producer + worker) and one
+`BenchCollector` subscribed to the bench topic. One node is the **driver**: it
+publishes and times the run.
+
+```
+          driver node A (publisher + timer)
+  ┌───────────────────────────────────────────────┐
+  │  P sender Tasks ─▶ broadcast!(N)               │
+  │                       │                        │
+  │                   producer ──local──▶ A.collector (counts)
+  │                       │  batched flush, one acked task per remote node
+  └───────────────────────┼────────────────────────┘
+                 ┌─────────┴─────────┐
+                 ▼                   ▼
+  ┌── node B ──────────┐  ┌── node C ──────────┐
+  │ worker             │  │ worker             │
+  │  └▶ local_broadcast│  │  └▶ local_broadcast│
+  │      └▶ B.collector│  │      └▶ C.collector│
+  └────────────────────┘  └────────────────────┘
+       (each collector counts {:m,_,_})
+```
+
+**Message flow:** driver spawns `publishers` sender Tasks → each `broadcast!`s its
+share of the N messages → the local producer buffers them and, every
+`batch_interval`, flushes to each remote node's worker concurrently (one acked
+call per node) → each worker `local_broadcast`s to its node's subscribers → every
+node's `BenchCollector` increments its `{:m,_,_}` count. (Local delivery on A is
+done by PubSub dispatch, not a network hop.)
+
+**Timing / msg/s:** the driver starts a monotonic clock, publishes all N, then
+blocks on `await_count(N)` for **every** node's collector - a barrier that returns
+only once that node has received all N. When the slowest returns, it stops the
+clock. `msg/s = N / median(elapsed)` over `samples` runs; a sample is valid only if
+every node's count `== N` (`delivered=true`, no loss/dup).
+
+**Where it runs:** *local* - `:peer` nodes on one machine (`Cluster.spawn_nodes`),
+driver = first node. *Fly* - real machines clustered via libcluster; the driver is
+whichever node you `rpc` `EchoPubSub.Bench.Runner.run/1` on.
+
 ## Run locally
 
 Needs `MIX_ENV=test` (the harness reuses the test-only cluster helpers):
