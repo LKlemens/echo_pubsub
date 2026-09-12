@@ -105,12 +105,39 @@ Config Options
 Option                  | Description                                                               | Default        |
 :-----------------------| :------------------------------------------------------------------------ | :------------- |
 `:name`                 | The required name to register the PubSub processes, ie: `MyApp.PubSub`    |                |
-`:pool_size`            | Determines the number of workers and producers on each node               | 1              |
+`:pool_size`            | The number of workers and producers on each node                          | 1              |
 `:buffer_size`          | The numbers of messages to hold in memory for each producer in the pool   | 10_000         |
 `:batch_interval`       | Milliseconds to batch writes before a flush; `0` flushes immediately      | 200            |
 
+With `:pool_size > 1` there are independent producers and order/at-least-once is
+*per producer* (a broadcast routes by sender pid) - see
+[Pools and ordering](docs/how-it-works.md#pools-and-ordering).
+
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
 has been disconnected long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
+
+## Benchmarks
+
+Verified end-to-end throughput on a real Fly.io cluster (fra, `performance-4x`),
+every node receives every message, no loss, at `batch_interval=100`,
+`pool_size=1`, `publishers=4`, 10 B payload:
+
+| nodes | Fly.io (fra) |
+|------:|-------------:|
+| 3     | ~79k msg/s   |
+| 4     | ~75k msg/s   |
+
+Delivery is network-bound (Fly's private WireGuard mesh), and **batching is the
+dominant lever** -
+`batch_interval=0` collapses to ~1k msg/s (each message becomes its own acked
+round-trip). Small payloads (10–30 B) barely move the numbers, but a 200 B
+whole-object payload cuts 4-node throughput ~42% - so send small deltas, not whole
+objects.
+
+- **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
+  branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
+- Detailed results:
+  [Fly](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
 
 ## Credits
 

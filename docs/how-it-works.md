@@ -170,6 +170,15 @@ subscribers are new and only receive the buffered tail, so cold subscribers shou
 reload from a source of truth on startup - and if the gap outran the buffer,
 `:cursor_expired` fires anyway.)
 
+**A worker acks, then crashes (or crashes mid-batch).** The worker
+`local_broadcast`s the whole batch to its subscribers *before* it replies `:ok`
+(the reply is the return of that synchronous call), so an ack means the messages
+are already in the local subscribers' mailboxes - there is no "acked but not
+delivered" window. Crash *before* the reply → no ack → the producer's cursor never
+advances → the batch is replayed on rejoin. Crash *after* the reply → nothing lost,
+the messages are already enqueued. So a mid-batch crash can **duplicate**
+(at-least-once), never drop - see [Handling duplicate deliveries](#handling-duplicate-deliveries).
+
 **The producer crashes.** On restart `init` resets `write_cursor` to 0 with an
 empty buffer and re-registers with every worker. Each worker sees the node as
 *already registered* and broadcasts `:cursor_expired` to its local subscribers, so
@@ -200,6 +209,22 @@ So correctness is effectively unbounded.
   `config :echo_pubsub, concurrent_flush: false`.
 - **Retry.** Any failed send leaves that node's cursor untouched and schedules a
   retry flush, so the unacknowledged messages are redelivered.
+
+## Pools and ordering
+
+`pool_size = N` means **N independent producer+worker pairs** per node, each with
+its own ring buffer and cursors. A broadcast routes to one by
+`phash2(sender_pid, pool_size)`: a given pid always hits the same producer, so its
+own stream stays ordered and gap-free - but different pids may hit different
+producers. So **order and at-least-once are per producer, not across the pool**;
+two sends from different pids can arrive in either order (separate buffers, flush
+timers, workers).
+
+Concretely: a sender enqueues msg1 on producer X, then crashes; its replacement
+has a new pid that hashes to producer Y, and Y can deliver msg2 *before* X
+flushes/replays msg1. So keep a logically-ordered stream on one stable sender pid
+(or `pool_size = 1`) for total per-node order; use `pool_size > 1` only for
+independent streams or more throughput.
 
 ## Handling duplicate deliveries
 
