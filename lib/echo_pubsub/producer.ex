@@ -177,6 +177,7 @@ defmodule EchoPubSub.Producer do
   defp fan_out_concurrent(remote_pids, state) do
     supervisor = Module.concat(state.group, TaskSupervisor)
     call_timeout = state.call_timeout
+    group = state.group
 
     # Prepare batches here (reads own heap; big payloads stay refc-shared) so tasks
     # carry only message wrappers, never the whole ring buffer.
@@ -189,7 +190,7 @@ defmodule EchoPubSub.Producer do
     supervisor
     |> Task.Supervisor.async_stream_nolink(
       jobs,
-      fn {pid, node, batch} -> {node, deliver_batch(pid, batch, call_timeout)} end,
+      fn {pid, node, batch} -> {node, deliver_batch(pid, batch, call_timeout, group)} end,
       ordered: false,
       max_concurrency: length(jobs),
       timeout: :infinity
@@ -224,19 +225,19 @@ defmodule EchoPubSub.Producer do
   end
 
   # Remote call carrying no buffer, so it is safe in a task. Returns a verdict.
-  defp deliver(pid, batch, state), do: deliver_batch(pid, batch, state.call_timeout)
+  defp deliver(pid, batch, state), do: deliver_batch(pid, batch, state.call_timeout, state.group)
 
-  defp deliver_batch(_pid, :caught_up, _call_timeout), do: :ok
+  defp deliver_batch(_pid, :caught_up, _call_timeout, _group), do: :ok
 
-  defp deliver_batch(pid, {:expired, missed}, call_timeout) do
-    case safe_call(pid, {:expired, node()}, call_timeout, nil) do
+  defp deliver_batch(pid, {:expired, missed}, call_timeout, group) do
+    case safe_call(pid, {:expired, node()}, call_timeout, group) do
       :ok -> {:expired, missed}
       :error -> :expired_failed
     end
   end
 
-  defp deliver_batch(pid, {:messages, messages}, call_timeout) do
-    case safe_call(pid, messages, call_timeout, nil) do
+  defp deliver_batch(pid, {:messages, messages}, call_timeout, group) do
+    case safe_call(pid, messages, call_timeout, group) do
       :ok -> :ok
       :error -> {:failed, length(messages)}
     end
@@ -330,8 +331,8 @@ defmodule EchoPubSub.Producer do
 
   # Under an injected fault, outgoing sends short-circuit to :error so the batch
   # stays buffered and replays on recovery - the send-side half of the partition.
-  defp safe_call(pid, messages, call_timeout, _state) do
-    if FaultInjection.ok?() do
+  defp safe_call(pid, messages, call_timeout, group) do
+    if FaultInjection.ok?(group) do
       do_safe_call(pid, messages, call_timeout)
     else
       :error

@@ -11,7 +11,7 @@ defmodule EchoPubSub.Worker do
   @impl true
   def init({name, group}) do
     :ok = pg_join(group)
-    {:ok, %{pubsub: name, registrations: MapSet.new(), last_batch: []}}
+    {:ok, %{pubsub: name, group: group, registrations: MapSet.new(), last_batch: []}}
   end
 
   @impl true
@@ -24,7 +24,7 @@ defmodule EchoPubSub.Worker do
   def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
     state = %{state | last_batch: messages}
 
-    if FaultInjection.ok?() do
+    if FaultInjection.ok?(state.group) do
       deliver_batch(messages, from, state)
       {:reply, :ok, state}
     else
@@ -34,7 +34,7 @@ defmodule EchoPubSub.Worker do
 
   @impl true
   def handle_call({:expired, node}, _from, state) do
-    if FaultInjection.ok?() do
+    if FaultInjection.ok?(state.group) do
       broadcast_expired_message(state.pubsub, node)
       {:reply, :ok, state}
     else
