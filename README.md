@@ -10,6 +10,14 @@ This means that nodes can disconnect temporarily from the cluster - even for a b
 
 See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
 
+## Demo
+
+![Scoreboard demo](https://github.com/LKlemens/score_board/releases/download/media-v1/demo.gif)
+
+A live demo of [EchoPubSub](https://github.com/LKlemens/echo_pubsub): a three-node
+BEAM cluster where you can take a node offline mid-game and watch the events it
+missed replay in order when it comes back.
+
 ## How it works
 
 `Phoenix.PubSub.PG2` is fire-and-forget: a broadcast reaches only the nodes
