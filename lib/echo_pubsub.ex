@@ -29,7 +29,7 @@ defmodule EchoPubSub do
       # config/config.exs
       config :echo_pubsub, MyApp.PubSub,
         pool_size: 2,
-        buffer_size: 50_000,
+        buffer_size: 10_000,
         batch_interval: 100,
         call_timeout: 5000
 

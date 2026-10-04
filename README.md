@@ -144,8 +144,7 @@ objects.
 
 - **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
   branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
-- Detailed results:
-  [Fly](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
+- Detailed [results](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
 
 ## Credits
 
