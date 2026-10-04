@@ -63,8 +63,3 @@ tiny (round-trip-bound, not byte-bound) and pairs naturally with EchoPubSub's
 at-least-once semantics: a `{:set, field, value}`-style delta is idempotent, so a
 redelivered duplicate is harmless. Reserve whole-object sends for a cold resync
 after `{:cursor_expired, node}`.
-
-## Cost note
-
-Cluster scaled to 0 after the run (no machines billing). Bring it back with
-`fly scale count 3 -c bench/fly/fly.toml`.
