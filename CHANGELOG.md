@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.5 - 2026-10-04
+### Added
+- README: a demo section (three-node cluster, node taken offline mid-game, missed
+  events replayed on rejoin) and a benchmark section with verified Fly.io
+  throughput numbers plus links to the benchmark branch.
+- `docs/how-it-works.md`: a "Pools and ordering" section explaining that
+  `pool_size > 1` gives independent producers, so order and at-least-once hold per
+  producer rather than across the pool, and a scenario covering a worker that acks
+  and then crashes (duplicates possible, never drops).
+
+### Changed
+- Documentation links now point at hexdocs instead of relative repository paths.
+- Corrected the `:buffer_size` example in `EchoPubSub` to match the documented
+  default of `10_000`.
+- Dropped `docs/benchmarks.md` from the published docs extras; the benchmark
+  results live on the benchmark branch.
+
 ## v0.1.4 - 2026-09-06
 ### Added
 - Concurrent fan-out: each flush delivers to remote nodes in parallel (one task
