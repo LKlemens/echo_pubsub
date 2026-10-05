@@ -6,7 +6,7 @@
 
 A Phoenix.PubSub adapter that distributes messages between nodes using the erlang `:pg` module, like the default adapter, however with the additional guarentees of "at least once" delivery.
 
-This means that nodes can disconnect temporarily from the cluster - even for a blip as short as ~1ms - and then "catch up" when they rejoin, thanks to a buffer of messages and read cursors.
+This means that a transient network failure - even one as short as ~1ms, with the nodes still connected to the cluster - does not silently lose messages. Anything a node did not acknowledge stays buffered and is replayed to it, in order, as soon as delivery succeeds again, thanks to a buffer of messages and read cursors.
 
 See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
 
@@ -20,20 +20,21 @@ missed replay in order when it comes back.
 
 ## How it works
 
-`Phoenix.PubSub.PG2` is fire-and-forget: a broadcast reaches only the nodes
-connected at that instant. A blip as short as ~1ms silently drops messages for any
-node briefly unreachable.
+`Phoenix.PubSub.PG2` is fire-and-forget: a broadcast is sent once, with no
+acknowledgement and no buffer. A network failure as short as ~1ms silently drops
+every message sent while delivery to a node is failing, even though that node
+never left the cluster.
 
 EchoPubSub makes delivery **at-least-once**:
 
 - **Buffer + cursors** - each broadcaster keeps a ring buffer of recent messages,
   plus a per-node read cursor that advances only on an acked delivery.
 
-- **Replay on reconnect** - a reconnecting node is replayed exactly the messages
-  it missed, in order.
+- **Replay once delivery succeeds again** - a node that missed messages is
+  replayed exactly those messages, in order.
 
-- **Told if it fell behind** - if it stayed gone long enough that those messages
-  were overwritten in the bounded buffer, it gets `{:cursor_expired, node_name}`
+- **Told if it fell behind** - if it stayed unreachable long enough that those
+  messages were overwritten in the bounded buffer, it gets `{:cursor_expired, node_name}`
   (see [Usage](#usage)) telling it to reload from a source of truth.
 
 **Core guarantee: either you receive every message in order, or you are told you
@@ -52,7 +53,7 @@ A good fit for small-to-mid projects that need reliable cross-node messaging but
 don't want the operational burden of Kafka / RabbitMQ / NATS:
 
 - **Replicated in-memory caches** - a missed invalidation means a node serves
-  stale data forever. EchoPubSub replays it on reconnect, or sends
+  stale data forever. EchoPubSub replays it once the network recovers, or sends
   `{:cursor_expired, node}` to trigger a reload - never a silent stale node.
 - **Event logs / projections / derived state** kept in sync across nodes.
 - **Presence / state fan-out** where a dropped update corrupts a peer's view.
@@ -122,7 +123,7 @@ With `:pool_size > 1` there are independent producers and order/at-least-once is
 [Pools and ordering](https://echo-pubsub.hexdocs.pm/how-it-works.html#pools-and-ordering).
 
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
-has been disconnected long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
+has been unreachable long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
 
 ## Benchmarks
 

@@ -49,8 +49,9 @@ defmodule EchoPubSub do
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once
   the buffer is full, new messages overwrite the oldest message in the buffer.
 
-  This means that if a node in the cluster is disconnected long enough that when it reconnects, its cursor
-  points to a message that no longer exists, it will receive a special message over pubsub: `{:cursor_expired, node@host}`
+  This means that if a node is unreachable long enough - a sustained network failure, or an actual
+  disconnect - that its cursor points to a message that no longer exists, it will receive a special
+  message over pubsub: `{:cursor_expired, node@host}`
 
   Applications are encouraged to handle and act on this message to get to a valid state, such as reloading all state from
   a source of truth like the db or another node. While this technically means that we don't guarentee every node will
