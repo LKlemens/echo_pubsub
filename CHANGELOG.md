@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.6 - 2026-10-05
+### Changed
+- Documentation now describes the gap EchoPubSub closes as a transient network
+  failure rather than a node leaving and rejoining the cluster: messages are lost
+  while delivery to a node fails even though both nodes stay members of the
+  cluster, and they are replayed once delivery succeeds again.
+
 ## v0.1.5 - 2026-10-04
 ### Added
 - README: a demo section (three-node cluster, node taken offline mid-game, missed
