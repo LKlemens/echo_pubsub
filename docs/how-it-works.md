@@ -206,12 +206,16 @@ So correctness is effectively unbounded.
 - **Batching.** `batch_interval` milliseconds buffers writes and then triggers one
   `:flush_all`; `0` flushes immediately. Full batches amortize the round-trip
   across many messages, which is where throughput comes from.
-- **Concurrent fan-out.** With two or more remote peers, the flush delivers to each
-  node in its own task (via a `Task.Supervisor`), so it costs the slowest single
-  round-trip instead of the sum of all of them. Disable with
-  `config :echo_pubsub, concurrent_flush: false`.
+- **Non-blocking fan-out.** The flush hands each node's batch to its own task (via
+  a `Task.Supervisor`) and returns immediately, so it costs the slowest single
+  round-trip instead of the sum of all of them, and an unresponsive peer that burns
+  the full `:call_timeout` cannot stop the producer from accepting writes. At most
+  one batch per node is in flight, which is what keeps batches in cursor order.
+  (`config :echo_pubsub, concurrent_flush: false` is accepted and ignored.)
 - **Retry.** Any failed send leaves that node's cursor untouched and schedules a
-  retry flush, so the unacknowledged messages are redelivered.
+  retry flush, so the unacknowledged messages are redelivered. A node's cursor
+  advances to the cursor its batch was prepared at, so writes that landed while
+  that batch was in flight are not treated as acknowledged.
 
 ## Pools and ordering
 

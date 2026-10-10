@@ -35,14 +35,16 @@ defmodule EchoPubSub do
 
   Options passed directly to the supervisor take precedence over config values.
 
-  ### Concurrent fan-out
+  ### Non-blocking fan-out
 
-  Each flush delivers to remote nodes concurrently (one task per node), so it costs
-  the slowest round-trip instead of their sum. On by default, engaging at 2+ remote
-  peers. Disable with:
+  Each flush hands every remote node's batch to its own task and returns, so a
+  flush costs the slowest round-trip instead of their sum and the producer keeps
+  accepting writes while a slow or unreachable peer burns its `:call_timeout`.
+  A node's read cursor advances only when its task reports an ack, and at most one
+  batch per node is in flight, so batches still arrive in cursor order.
 
-      # config/config.exs
-      config :echo_pubsub, concurrent_flush: false
+  The `:concurrent_flush` option is still accepted and ignored; deliveries are now
+  always concurrent.
 
   ## Implementation
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1.7 - 2026-10-05
+### Changed
+- The flush no longer waits for remote deliveries. Each node's batch is handed to
+  its own task and the verdict is applied when it comes back, so an unresponsive
+  peer that burns the full `:call_timeout` (5000 ms by default) can no longer stall
+  the producer - previously every broadcast on that node blocked behind it and
+  could itself time out. At most one batch per node is in flight, so batches still
+  arrive in cursor order, and a cursor advances to the cursor its batch was
+  prepared at rather than to the current write cursor.
+- `:concurrent_flush` is accepted but no longer used: deliveries are always
+  concurrent now.
+
+### Fixed
+- The producer survives an unexpected message instead of crashing on it and losing
+  the buffer together with every node's read cursor.
+- The flush timer field held the whole producer state instead of the timer
+  reference; it now holds the reference, as its type says.
+
 ## v0.1.6 - 2026-10-05
 ### Changed
 - Documentation now describes the gap EchoPubSub closes as a transient network
