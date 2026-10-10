@@ -169,3 +169,34 @@ fly scale count 0 -c bench/fly/fly.toml
   toward `scale count` but never clusters, so you silently run one node short.
   There's no `fly.toml` key for this; it's a deploy-time flag. To fix an existing
   one: `fly machine destroy <standby-id> --force` then redeploy with `--ha=false`.
+
+## One failing node / retry growth
+
+`EchoPubSub.RetryBench` (`fly/retry_bench.ex`) measures what one bad node costs.
+Three nodes: **A** publishes, **B** is healthy, **C** fails. While C fails, A
+re-sends C's whole unacked backlog on every retry, so the batch grows step by
+step (6k → 10k messages by default). Per step it reports the batch size on the
+wire, the time of one attempt, peak memory on A and C (10 ms sampler), C's
+mailbox length, and the latency of a probe on the healthy B; then it heals C and
+reports recovery time and duplicates.
+
+- `reject` - C's worker answers `:error` at once (fault injection, enabled in the
+  `:test` and `:bench` builds only).
+- `hung` - C's worker is suspended; every attempt waits out `call_timeout` and
+  stays queued in C's mailbox, so they all run on resume.
+
+Messages are scoreboard-like maps padded to the requested size (200 B / 700 B by
+default), each with its own data.
+
+```sh
+# local, 3 :peer nodes
+FAIL_MODE=reject MIX_ENV=test mix run bench/retry.exs
+FAIL_MODE=hung   MIX_ENV=test mix run bench/retry.exs
+# STEPS=6000,8000,10000 PAYLOAD_SIZES=200,700 BATCH_INTERVAL=100 override defaults
+
+# Fly, from a console on any machine of a 3-node cluster
+/app/bin/echo_pubsub rpc 'EchoPubSub.RetryBench.run(mode: :reject)'
+/app/bin/echo_pubsub rpc 'EchoPubSub.RetryBench.run(mode: :hung)'
+```
+
+Results and findings: [`results-retry.md`](results-retry.md).

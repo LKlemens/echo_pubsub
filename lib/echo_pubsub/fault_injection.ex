@@ -5,7 +5,7 @@ defmodule EchoPubSub.FaultInjection do
 
   In production builds `ok?/0` is a hardcoded `true` that no runtime setting can
   flip, so injected faults can never activate. The switch is enabled under
-  `:test`, or when a consuming app opts in for a demo:
+  `:test` and `:bench` (the Fly benchmark), or when a consuming app opts in for a demo:
 
       # config/config.exs
       config :echo_pubsub, :enable_fault_injection, true
@@ -13,7 +13,11 @@ defmodule EchoPubSub.FaultInjection do
   Once enabled, `ok?/0` honors the runtime `:fault_injection` flag, toggled with
   `Application.put_env(:echo_pubsub, :fault_injection, :error | :ok)`.
   """
-  @enabled Application.compile_env(:echo_pubsub, :enable_fault_injection, Mix.env() == :test)
+  @enabled Application.compile_env(
+             :echo_pubsub,
+             :enable_fault_injection,
+             Mix.env() in [:test, :bench]
+           )
 
   @doc "Whether to deliver normally (true) or inject a fault (false)."
   @spec ok?() :: boolean()
