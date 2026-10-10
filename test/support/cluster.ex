@@ -137,13 +137,15 @@ defmodule EchoPubSub.Cluster do
     capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
     buffer_size = Keyword.get(opts, :buffer_size, 10)
     pool_size = Keyword.get(opts, :pool_size, 1)
+    call_timeout = Keyword.get(opts, :call_timeout, 5000)
 
     remote_run %{pid: pid},
       batch_interval: batch_interval,
       capacity_warning_threshold: capacity_warning_threshold,
       capacity_warning_interval: capacity_warning_interval,
       buffer_size: buffer_size,
-      pool_size: pool_size do
+      pool_size: pool_size,
+      call_timeout: call_timeout do
       parent = self()
 
       spawn(fn ->
@@ -154,6 +156,7 @@ defmodule EchoPubSub.Cluster do
            pool_size: pool_size,
            buffer_size: buffer_size,
            batch_interval: batch_interval,
+           call_timeout: call_timeout,
            capacity_warning_threshold: capacity_warning_threshold,
            capacity_warning_interval: capacity_warning_interval},
           {EchoPubSub.TestSubscriber, name: EchoPubSub.TestSubscriber}
