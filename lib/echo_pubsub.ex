@@ -29,28 +29,28 @@ defmodule EchoPubSub do
       # config/config.exs
       config :echo_pubsub, MyApp.PubSub,
         pool_size: 2,
-        buffer_size: 50_000,
+        buffer_size: 10_000,
         batch_interval: 100,
         call_timeout: 5000
 
   Options passed directly to the supervisor take precedence over config values.
 
-  ### Concurrent fan-out
+  ### Non-blocking fan-out
 
-  Each flush delivers to remote nodes concurrently (one task per node), so it costs
-  the slowest round-trip instead of their sum. On by default, engaging at 2+ remote
-  peers. Disable with:
-
-      # config/config.exs
-      config :echo_pubsub, concurrent_flush: false
+  Each flush hands every remote node's batch to its own task and returns, so a
+  flush costs the slowest round-trip instead of their sum and the producer keeps
+  accepting writes while a slow or unreachable peer burns its `:call_timeout`.
+  A node's read cursor advances only when its task reports an ack, and at most one
+  batch per node is in flight, so batches still arrive in cursor order.
 
   ## Implementation
 
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once
   the buffer is full, new messages overwrite the oldest message in the buffer.
 
-  This means that if a node in the cluster is disconnected long enough that when it reconnects, its cursor
-  points to a message that no longer exists, it will receive a special message over pubsub: `{:cursor_expired, node@host}`
+  This means that if a node is unreachable long enough - a sustained network failure, or an actual
+  disconnect - that its cursor points to a message that no longer exists, it will receive a special
+  message over pubsub: `{:cursor_expired, node@host}`
 
   Applications are encouraged to handle and act on this message to get to a valid state, such as reloading all state from
   a source of truth like the db or another node. While this technically means that we don't guarentee every node will

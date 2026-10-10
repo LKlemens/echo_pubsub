@@ -6,33 +6,42 @@
 
 A Phoenix.PubSub adapter that distributes messages between nodes using the erlang `:pg` module, like the default adapter, however with the additional guarentees of "at least once" delivery.
 
-This means that nodes can disconnect temporarily from the cluster - even for a blip as short as ~1ms - and then "catch up" when they rejoin, thanks to a buffer of messages and read cursors.
+This means that a transient network failure - even one as short as ~1ms, with the nodes still connected to the cluster - does not silently lose messages. Anything a node did not acknowledge stays buffered and is replayed to it, in order, as soon as delivery succeeds again, thanks to a buffer of messages and read cursors.
 
-See the [Docs](https://hexdocs.pm/echo_pubsub/EchoPubSub.html) for more information.
+See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
+
+## Demo
+
+[![Scoreboard demo](https://github.com/LKlemens/score_board/releases/download/media-v1/demo.gif)](https://scoreboard-pool.fly.dev/)
+
+[Live demo](https://scoreboard-pool.fly.dev/): a three-node BEAM cluster where
+you can take a node offline mid-game and watch the events it missed replay in
+order when it comes back.
 
 ## How it works
 
-`Phoenix.PubSub.PG2` is fire-and-forget: a broadcast reaches only the nodes
-connected at that instant. A blip as short as ~1ms silently drops messages for any
-node briefly unreachable.
+`Phoenix.PubSub.PG2` is fire-and-forget: a broadcast is sent once, with no
+acknowledgement and no buffer. A network failure as short as ~1ms silently drops
+every message sent while delivery to a node is failing, even though that node
+never left the cluster.
 
 EchoPubSub makes delivery **at-least-once**:
 
 - **Buffer + cursors** - each broadcaster keeps a ring buffer of recent messages,
   plus a per-node read cursor that advances only on an acked delivery.
 
-- **Replay on reconnect** - a reconnecting node is replayed exactly the messages
-  it missed, in order.
+- **Replay once delivery succeeds again** - a node that missed messages is
+  replayed exactly those messages, in order.
 
-- **Told if it fell behind** - if it stayed gone long enough that those messages
-  were overwritten in the bounded buffer, it gets `{:cursor_expired, node_name}`
+- **Told if it fell behind** - if it stayed unreachable long enough that those
+  messages were overwritten in the bounded buffer, it gets `{:cursor_expired, node_name}`
   (see [Usage](#usage)) telling it to reload from a source of truth.
 
 **Core guarantee: either you receive every message in order, or you are told you
 fell behind** - never a silent gap.
 
-See [how it works](docs/how-it-works.md) for diagrams, the cursor internals, and
-failure scenarios.
+See [how it works](https://echo-pubsub.hexdocs.pm/how-it-works.html) for diagrams,
+the cursor internals, and failure scenarios.
 
 ## When to use it
 
@@ -44,7 +53,7 @@ A good fit for small-to-mid projects that need reliable cross-node messaging but
 don't want the operational burden of Kafka / RabbitMQ / NATS:
 
 - **Replicated in-memory caches** - a missed invalidation means a node serves
-  stale data forever. EchoPubSub replays it on reconnect, or sends
+  stale data forever. EchoPubSub replays it once the network recovers, or sends
   `{:cursor_expired, node}` to trigger a reload - never a silent stale node.
 - **Event logs / projections / derived state** kept in sync across nodes.
 - **Presence / state fan-out** where a dropped update corrupts a peer's view.
@@ -62,7 +71,7 @@ and bounded - it closes the network-blip gap, it is not a durable log.
 handled but its `ack` is lost, the cursor doesn't advance and the message is re-sent
 - so a handler can see the same message twice. Make handlers tolerate duplicates:
 send absolute state rather than deltas, or dedupe by a per-message id. See
-[handling duplicate deliveries](docs/how-it-works.md#handling-duplicate-deliveries)
+[handling duplicate deliveries](https://echo-pubsub.hexdocs.pm/how-it-works.html#handling-duplicate-deliveries)
 for worked examples.
 
 ## Usage
@@ -105,12 +114,38 @@ Config Options
 Option                  | Description                                                               | Default        |
 :-----------------------| :------------------------------------------------------------------------ | :------------- |
 `:name`                 | The required name to register the PubSub processes, ie: `MyApp.PubSub`    |                |
-`:pool_size`            | Determines the number of workers and producers on each node               | 1              |
+`:pool_size`            | The number of workers and producers on each node                          | 1              |
 `:buffer_size`          | The numbers of messages to hold in memory for each producer in the pool   | 10_000         |
 `:batch_interval`       | Milliseconds to batch writes before a flush; `0` flushes immediately      | 200            |
 
+With `:pool_size > 1` there are independent producers and order/at-least-once is
+*per producer* (a broadcast routes by sender pid) - see
+[Pools and ordering](https://echo-pubsub.hexdocs.pm/how-it-works.html#pools-and-ordering).
+
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
-has been disconnected long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
+has been unreachable long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
+
+## Benchmarks
+
+Verified end-to-end throughput on a real Fly.io cluster (fra, `performance-4x`),
+every node receives every message, no loss, at `batch_interval=100`,
+`pool_size=1`, `publishers=4`, 10 B payload:
+
+| nodes | Fly.io (fra) |
+|------:|-------------:|
+| 3     | ~79k msg/s   |
+| 4     | ~75k msg/s   |
+
+Delivery is network-bound (Fly's private WireGuard mesh), and **batching is the
+dominant lever** -
+`batch_interval=0` collapses to ~1k msg/s (each message becomes its own acked
+round-trip). Small payloads (10–30 B) barely move the numbers, but a 200 B
+whole-object payload cuts 4-node throughput ~42% - so send small deltas, not whole
+objects.
+
+- **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
+  branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
+- Detailed [results](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
 
 ## Credits
 

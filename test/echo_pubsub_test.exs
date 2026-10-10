@@ -356,27 +356,163 @@ defmodule EchoPubSubTest do
     refute log =~ "Buffer at"
   end
 
-  test "concurrent flush (default) delivers to every remote node", %{peer1: peer1, peer2: peer2} do
+  test "flush delivers to every remote node", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
     remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
-    # peer1 -> 2 remote workers: the >= 2 case that takes the concurrent path.
-    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, true)
-    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_on)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :fan_out)
 
-    assert_peer_receive peer2, :concurrent_on
-    assert_peer_receive peer3, :concurrent_on
+    assert_peer_receive peer2, :fan_out
+    assert_peer_receive peer3, :fan_out
   end
 
-  test "sequential flush (concurrency disabled) still delivers to every remote node",
-       %{peer1: peer1, peer2: peer2} do
+  # A suspended worker accepts the delivery call but never answers it, so the
+  # producer's call runs the full :call_timeout - an unresponsive peer that never
+  # drops out of the cluster, which no monitor can report.
+  test "producer keeps serving writes while a peer is unresponsive", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :stalled)
+
+    elapsed_ms =
+      remote_run peer1 do
+        {micros, :ok} =
+          :timer.tc(fn -> Phoenix.PubSub.broadcast!(PubSubTest, "topic", :not_blocked) end)
+
+        div(micros, 1000)
+      end
+
+    assert elapsed_ms < 1000,
+           "broadcast blocked for #{elapsed_ms}ms behind an unresponsive peer"
+
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    assert_peer_receive peer2, :stalled
+    assert_peer_receive peer2, :not_blocked
+  end
+
+  test "writes queued behind an in-flight batch arrive in order", %{peer1: peer1, peer2: peer2} do
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    for n <- 1..5 do
+      remote_run peer1, n: n do
+        Phoenix.PubSub.broadcast!(PubSubTest, "topic", n)
+      end
+    end
+
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    for n <- 1..5, do: assert_peer_receive(peer2, ^n)
+  end
+
+  test "a failing peer does not hold back a healthy one", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
     remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
-    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, false)
-    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_off)
+    # peer3's worker rejects every batch; peer2's keeps accepting.
+    remote_run peer3, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
 
-    assert_peer_receive peer2, :concurrent_off
-    assert_peer_receive peer3, :concurrent_off
+    for message <- [:iso1, :iso2, :iso3] do
+      remote_run peer1, message: message do
+        Phoenix.PubSub.broadcast!(PubSubTest, "topic", message)
+      end
+    end
+
+    # The healthy peer is delivered on its own cursor, unaffected by peer3.
+    assert_peer_receive peer2, :iso1
+    assert_peer_receive peer2, :iso2
+    assert_peer_receive peer2, :iso3
+
+    # Several 200ms retry cycles pass with peer3 still rejecting.
+    Process.sleep(500)
+    refute_peer_receive peer3, :iso1
+
+    remote_run peer3, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+
+    assert_peer_receive peer3, :iso1
+    assert_peer_receive peer3, :iso2
+    assert_peer_receive peer3, :iso3
+
+    # Those retries replayed to peer3 only: peer2 acked the batch, so its cursor
+    # moved and it is never re-sent what it already has.
+    refute_peer_receive peer2, :iso1
+  end
+
+  test "writes behind an in-flight batch are flushed once its verdict arrives", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    # :follow1 is dispatched and stalls on the suspended worker. The next two are
+    # buffered, and every flush while that batch is in flight skips peer2.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :follow1)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :follow2)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :follow3)
+
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    # No further broadcast: the verdict for :follow1 is the only thing that can
+    # schedule the flush carrying :follow2 and :follow3.
+    assert_peer_receive peer2, :follow1
+    assert_peer_receive peer2, :follow2
+    assert_peer_receive peer2, :follow3
+  end
+
+  test "a write landing mid-delivery is not acked by the in-flight batch", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    # The first write is dispatched and stalls; the second only reaches the buffer.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :first)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :second)
+
+    {target, write_cursor} =
+      remote_run peer1, peer2_node: peer2.node do
+        state = :sys.get_state(PubSubTest.Adapter.Producer)
+        {_ref, target} = Map.fetch!(state.in_flight, peer2_node)
+        {target, state.write_cursor}
+      end
+
+    assert target == 1
+    assert write_cursor == 2
+
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    assert_peer_receive peer2, :first
+    assert_peer_receive peer2, :second
+  end
+
+  # A call timeout does not pull the request out of the hung worker's mailbox, so
+  # every timed-out attempt runs on resume: delivery is at-least-once.
+  test "re-sends a batch after its delivery call times out" do
+    # Short timeout so the call gives up while the worker is still suspended.
+    [peer1, peer2] =
+      spawn_nodes(["timeout_node1", "timeout_node2"],
+        call_timeout: 100,
+        capacity_warning_threshold: 2.0
+      )
+
+    remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    # Hung but connected peer: calls queue up instead of failing fast.
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg)
+
+    # Stays hung across several 100ms timeouts; each 200ms retry queues another
+    # copy of the batch in the worker's mailbox.
+    Process.sleep(500)
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    # Every queued copy runs on resume, so :msg arrives several times. Two are
+    # enough to prove the batch was re-sent; the exact count depends on timing.
+    assert_peer_receive peer2, :msg
+    assert_peer_receive peer2, :msg
   end
 end

@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.1.7 - 2026-10-05
+### Changed
+- The flush no longer waits for remote deliveries. Each node's batch is handed to
+  its own task and the verdict is applied when it comes back, so an unresponsive
+  peer that burns the full `:call_timeout` (5000 ms by default) can no longer stall
+  the producer - previously every broadcast on that node blocked behind it and
+  could itself time out. At most one batch per node is in flight, so batches still
+  arrive in cursor order, and a cursor advances to the cursor its batch was
+  prepared at rather than to the current write cursor.
+- `:concurrent_flush` is removed: deliveries are always concurrent now.
+
+### Fixed
+- The producer survives an unexpected message instead of crashing on it and losing
+  the buffer together with every node's read cursor.
+- The flush timer field held the whole producer state instead of the timer
+  reference; it now holds the reference, as its type says.
+
+## v0.1.6 - 2026-10-05
+### Changed
+- Documentation now describes the gap EchoPubSub closes as a transient network
+  failure rather than a node leaving and rejoining the cluster: messages are lost
+  while delivery to a node fails even though both nodes stay members of the
+  cluster, and they are replayed once delivery succeeds again.
+
+## v0.1.5 - 2026-10-04
+### Added
+- README: a demo section (three-node cluster, node taken offline mid-game, missed
+  events replayed on rejoin) and a benchmark section with verified Fly.io
+  throughput numbers plus links to the benchmark branch.
+- `docs/how-it-works.md`: a "Pools and ordering" section explaining that
+  `pool_size > 1` gives independent producers, so order and at-least-once hold per
+  producer rather than across the pool, and a scenario covering a worker that acks
+  and then crashes (duplicates possible, never drops).
+
+### Changed
+- Documentation links now point at hexdocs instead of relative repository paths.
+- Corrected the `:buffer_size` example in `EchoPubSub` to match the documented
+  default of `10_000`.
+- Dropped `docs/benchmarks.md` from the published docs extras; the benchmark
+  results live on the benchmark branch.
+
 ## v0.1.4 - 2026-09-06
 ### Added
 - Concurrent fan-out: each flush delivers to remote nodes in parallel (one task

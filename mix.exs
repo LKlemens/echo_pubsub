@@ -2,7 +2,7 @@ defmodule EchoPubSub.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/LKlemens/echo_pubsub"
-  @version "0.1.4"
+  @version "0.1.7"
 
   def project do
     [
@@ -28,7 +28,6 @@ defmodule EchoPubSub.MixProject do
         extras: [
           "README.md",
           "docs/how-it-works.md",
-          "docs/benchmarks.md",
           "CHANGELOG.md",
           "LICENSE"
         ],
