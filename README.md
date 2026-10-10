@@ -12,11 +12,11 @@ See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more informat
 
 ## Demo
 
-![Scoreboard demo](https://github.com/LKlemens/score_board/releases/download/media-v1/demo.gif)
+[![Scoreboard demo](https://github.com/LKlemens/score_board/releases/download/media-v1/demo.gif)](https://scoreboard-pool.fly.dev/)
 
-A live demo of [EchoPubSub](https://github.com/LKlemens/echo_pubsub): a three-node
-BEAM cluster where you can take a node offline mid-game and watch the events it
-missed replay in order when it comes back.
+[Live demo](https://scoreboard-pool.fly.dev/): a three-node BEAM cluster where
+you can take a node offline mid-game and watch the events it missed replay in
+order when it comes back.
 
 ## How it works
 
