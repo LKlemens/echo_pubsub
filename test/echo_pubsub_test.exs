@@ -356,29 +356,14 @@ defmodule EchoPubSubTest do
     refute log =~ "Buffer at"
   end
 
-  test "concurrent flush (default) delivers to every remote node", %{peer1: peer1, peer2: peer2} do
+  test "flush delivers to every remote node", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
     remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
-    # peer1 -> 2 remote workers: the >= 2 case that takes the concurrent path.
-    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, true)
-    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_on)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :fan_out)
 
-    assert_peer_receive peer2, :concurrent_on
-    assert_peer_receive peer3, :concurrent_on
-  end
-
-  test "delivers to every remote node whatever :concurrent_flush is set to",
-       %{peer1: peer1, peer2: peer2} do
-    peer3 = spawn_node("node3", [peer1])
-    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
-
-    # The setting is no longer read: deliveries always run in tasks.
-    remote_run peer1, do: Application.put_env(:echo_pubsub, :concurrent_flush, false)
-    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :concurrent_off)
-
-    assert_peer_receive peer2, :concurrent_off
-    assert_peer_receive peer3, :concurrent_off
+    assert_peer_receive peer2, :fan_out
+    assert_peer_receive peer3, :fan_out
   end
 
   # A suspended worker accepts the delivery call but never answers it, so the

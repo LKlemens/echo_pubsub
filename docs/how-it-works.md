@@ -211,7 +211,6 @@ So correctness is effectively unbounded.
   round-trip instead of the sum of all of them, and an unresponsive peer that burns
   the full `:call_timeout` cannot stop the producer from accepting writes. At most
   one batch per node is in flight, which is what keeps batches in cursor order.
-  (`config :echo_pubsub, concurrent_flush: false` is accepted and ignored.)
 - **Retry.** Any failed send leaves that node's cursor untouched and schedules a
   retry flush, so the unacknowledged messages are redelivered. A node's cursor
   advances to the cursor its batch was prepared at, so writes that landed while

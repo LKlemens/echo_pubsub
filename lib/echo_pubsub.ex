@@ -43,9 +43,6 @@ defmodule EchoPubSub do
   A node's read cursor advances only when its task reports an ack, and at most one
   batch per node is in flight, so batches still arrive in cursor order.
 
-  The `:concurrent_flush` option is still accepted and ignored; deliveries are now
-  always concurrent.
-
   ## Implementation
 
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once

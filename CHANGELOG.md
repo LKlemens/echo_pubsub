@@ -9,8 +9,7 @@
   could itself time out. At most one batch per node is in flight, so batches still
   arrive in cursor order, and a cursor advances to the cursor its batch was
   prepared at rather than to the current write cursor.
-- `:concurrent_flush` is accepted but no longer used: deliveries are always
-  concurrent now.
+- `:concurrent_flush` is removed: deliveries are always concurrent now.
 
 ### Fixed
 - The producer survives an unexpected message instead of crashing on it and losing
