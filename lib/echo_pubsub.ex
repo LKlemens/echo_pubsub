@@ -43,6 +43,23 @@ defmodule EchoPubSub do
   A node's read cursor advances only when its task reports an ack, and at most one
   batch per node is in flight, so batches still arrive in cursor order.
 
+  ## Loading state at startup
+
+  Load state only after the node is connected and subscribed:
+
+    1. connect the node to the cluster
+    2. subscribe to the topics
+    3. load state from the source of truth (e.g. the database)
+
+  A peer only sends this node the messages it flushes after registering the node,
+  which happens shortly after the node joins. A change a peer flushes before that
+  is never delivered here, so it reaches this node only if the state is loaded
+  after the registration.
+
+  A message broadcast before the load can still be delivered after it (batching
+  delays delivery, failed sends are retried), so its change may already be in the
+  loaded state: applying a message must tolerate seeing its change twice.
+
   ## Implementation
 
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once
