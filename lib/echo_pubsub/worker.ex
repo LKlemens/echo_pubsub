@@ -70,7 +70,9 @@ defmodule EchoPubSub.Worker do
   end
 
   defp broadcast_expired_message(pubsub, node) do
-    topics = Registry.select(pubsub, [{{:"$1", :_, :_}, [], [:"$1"]}])
+    # The registry holds one entry per subscriber, so a topic repeats once per
+    # subscriber; without uniq each subscriber would get the notice that many times.
+    topics = pubsub |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}]) |> Enum.uniq()
 
     Enum.each(topics, fn topic ->
       Phoenix.PubSub.local_broadcast(pubsub, topic, {:cursor_expired, node})

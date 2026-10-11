@@ -191,6 +191,34 @@ defmodule EchoPubSubTest do
     assert_peer_receive peer2, {:cursor_expired, ^node}
   end
 
+  test "each subscriber gets one 'expired' message however many share its topic", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. A second subscriber to "topic" on peer2, next to TestSubscriber.
+    remote_run peer2 do
+      parent = self()
+
+      spawn(fn ->
+        Phoenix.PubSub.subscribe(PubSubTest, "topic")
+        send(parent, :subscribed)
+        Process.sleep(:infinity)
+      end)
+
+      receive do
+        :subscribed -> :ok
+      end
+    end
+
+    # 2. peer1's producer restarts, so peer2 is told it may have missed messages.
+    remote_run peer1, do: GenServer.stop(PubSubTest.Adapter.Producer, :normal)
+
+    # 3. TestSubscriber gets the notice exactly once.
+    node = peer1.node
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+    refute_peer_receive peer2, {:cursor_expired, ^node}
+  end
+
   test "messages are batched together within 200ms window" do
     # spawn nodes with batch_interval: 200 for batching behavior
     [peer1, peer2] = spawn_nodes(["batch_node1", "batch_node2"], batch_interval: 200)
