@@ -16,7 +16,10 @@ defmodule EchoPubSub.Producer do
 
     * `group` - the `:pg` group this producer delivers to (its delivery scope)
     * `write_cursor` - count of messages ever written; the next write lands here
-    * `read_cursors` - map of node to its next-needed cursor; everything below it that node has acked
+    * `read_cursors` - map of node to its next-needed cursor; everything below it that node has acked.
+      A node is absent until its registration is acked
+    * `registering` - map of node to the `{task reference, start cursor}` of its pending registration;
+      the reference is `nil` while a failed attempt waits for its retry
     * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
@@ -30,6 +33,7 @@ defmodule EchoPubSub.Producer do
     field(:group, group())
     field(:write_cursor, cursor(), default: 0)
     field(:read_cursors, %{node() => cursor()})
+    field(:registering, %{node() => {reference() | nil, cursor()}}, default: %{})
     field(:in_flight, %{node() => {reference(), cursor()}}, default: %{})
     field(:buffer, :array.array())
     field(:batch_interval, timeout())
@@ -71,12 +75,11 @@ defmodule EchoPubSub.Producer do
       ) do
     {_ref, pids} = :pg.monitor(Phoenix.PubSub, group)
 
-    Enum.each(pids, &GenServer.call(&1, {:register, node()}))
-
     state = %__MODULE__{
       group: group,
       write_cursor: 0,
-      read_cursors: Map.new(pids, &{node(&1), 0}),
+      read_cursors: %{},
+      registering: %{},
       in_flight: %{},
       buffer: :array.new(buffer_size),
       batch_interval: batch_interval,
@@ -87,7 +90,8 @@ defmodule EchoPubSub.Producer do
       last_capacity_warning_at: nil
     }
 
-    {:ok, state}
+    # Registration runs in tasks, so a hung peer cannot block startup.
+    {:ok, Enum.reduce(pids, state, &dispatch_node(&1, node(&1), &2))}
   end
 
   @impl GenServer
@@ -140,29 +144,40 @@ defmodule EchoPubSub.Producer do
     {:noreply, %{state | flush_timer: nil}}
   end
 
-  # A delivery task reporting its verdict. The cursor advances to the cursor the
-  # batch was prepared at, not to the current one: writes that landed while the
-  # batch was in flight are not acked by it.
+  # A registration or delivery task reporting back. A delivery advances the cursor
+  # to the cursor the batch was prepared at, not to the current one: writes that
+  # landed while the batch was in flight are not acked by it.
   @impl GenServer
-  def handle_info({ref, verdict}, state) when is_reference(ref) do
-    case pop_in_flight(state, ref) do
-      :error ->
-        {:noreply, state}
-
-      {:ok, node, target, state} ->
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case find_task(state, ref) do
+      {:registration, node, start} ->
         Process.demonitor(ref, [:flush])
+        {:noreply, apply_registration(state, node, start, result)}
 
-        {:noreply, state |> apply_verdict(node, target, verdict) |> maybe_follow_up(node)}
+      {:delivery, node, target} ->
+        Process.demonitor(ref, [:flush])
+        state = %{state | in_flight: Map.delete(state.in_flight, node)}
+        {:noreply, state |> apply_verdict(node, target, result) |> maybe_follow_up(node)}
+
+      :unknown ->
+        {:noreply, state}
     end
   end
 
-  # A delivery task that died without reporting - only an unexpected bug, since
-  # safe_call catches every remote failure. Keep the cursor, force a retry.
+  # A task that died without reporting - only an unexpected bug, since safe_call
+  # catches every remote failure. Keep the cursor, force a retry.
   @impl GenServer
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    case pop_in_flight(state, ref) do
-      :error -> {:noreply, state}
-      {:ok, _node, _target, state} -> {:noreply, schedule_retry_flush(state)}
+    case find_task(state, ref) do
+      {:registration, node, start} ->
+        {:noreply, apply_registration(state, node, start, :error)}
+
+      {:delivery, node, _target} ->
+        state = %{state | in_flight: Map.delete(state.in_flight, node)}
+        {:noreply, schedule_retry_flush(state)}
+
+      :unknown ->
+        {:noreply, state}
     end
   end
 
@@ -170,15 +185,60 @@ defmodule EchoPubSub.Producer do
   @impl GenServer
   def handle_info(_message, state), do: {:noreply, state}
 
-  # Deliveries run in tasks and report back, so the producer keeps serving writes
-  # while a slow or unreachable peer burns its call timeout. At most one batch per
-  # node is in flight, which is what keeps batches arriving in cursor order.
+  # Registrations and deliveries run in tasks and report back, so the producer
+  # keeps serving writes while a slow or unreachable peer burns its call timeout.
+  # At most one task per node runs at a time, which keeps batches arriving in
+  # cursor order and keeps every message behind the node's registration.
   defp dispatch_node(pid, node, state) do
-    if Map.has_key?(state.in_flight, node) do
-      state
-    else
-      start_delivery(pid, node, prepare_batch(node, state), state)
+    cond do
+      registration_running?(state, node) or delivery_running?(state, node) -> state
+      not Map.has_key?(state.read_cursors, node) -> start_registration(pid, node, state)
+      true -> start_delivery(pid, node, prepare_batch(node, state), state)
     end
+  end
+
+  defp registration_running?(state, node) do
+    match?({:ok, {ref, _start}} when is_reference(ref), Map.fetch(state.registering, node))
+  end
+
+  defp delivery_running?(state, node), do: Map.has_key?(state.in_flight, node)
+
+  defp start_registration(pid, node, state) do
+    start = registration_start(state, node)
+    call_timeout = state.call_timeout
+    supervisor = Module.concat(state.group, TaskSupervisor)
+
+    task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        safe_call(pid, {:register, node()}, call_timeout, nil)
+      end)
+
+    %{state | registering: Map.put(state.registering, node, {task.ref, start})}
+  end
+
+  # On the first attempt the node joins the current batch window: it starts at
+  # the cursor the last flush ended at (the local node's cursor), so it gets every
+  # write not yet flushed, as it would have had it been a member when that flush
+  # ran. A retry keeps that start, so writes flushed while earlier attempts were
+  # failing are still delivered.
+  defp registration_start(state, node) do
+    case Map.fetch(state.registering, node) do
+      {:ok, {nil, start}} -> start
+      :error -> Map.get(state.read_cursors, node(), 0)
+    end
+  end
+
+  defp apply_registration(state, node, start, :ok) do
+    %{state | registering: Map.delete(state.registering, node)}
+    |> advance(node, start)
+    |> maybe_follow_up(node)
+  end
+
+  # The node stays without a read cursor, so the retry flush registers it again
+  # from the same start.
+  defp apply_registration(state, node, start, :error) do
+    %{state | registering: Map.put(state.registering, node, {nil, start})}
+    |> schedule_retry_flush()
   end
 
   defp start_delivery(_pid, _node, :caught_up, state), do: state
@@ -196,14 +256,21 @@ defmodule EchoPubSub.Producer do
     %{state | in_flight: Map.put(state.in_flight, node, {task.ref, target})}
   end
 
-  defp pop_in_flight(state, ref) do
-    case Enum.find(state.in_flight, fn {_node, {task_ref, _target}} -> task_ref == ref end) do
-      nil ->
-        :error
-
-      {node, {_task_ref, target}} ->
-        {:ok, node, target, %{state | in_flight: Map.delete(state.in_flight, node)}}
+  # Every task ref belongs to exactly one map: registrations and deliveries
+  # never share a ref.
+  defp find_task(state, ref) do
+    case {find_entry(state.registering, ref), find_entry(state.in_flight, ref)} do
+      {{node, start}, nil} -> {:registration, node, start}
+      {nil, {node, target}} -> {:delivery, node, target}
+      {nil, nil} -> :unknown
     end
+  end
+
+  defp find_entry(tasks, ref) do
+    Enum.find_value(tasks, fn
+      {node, {^ref, cursor}} -> {node, cursor}
+      _ -> nil
+    end)
   end
 
   # A node skipped during a flush because it was mid-delivery still needs the
@@ -217,8 +284,9 @@ defmodule EchoPubSub.Producer do
   end
 
   # Pure: decide what this node needs. Runs in the producer (reads the buffer).
+  # Only registered nodes get here, so the read cursor always exists.
   defp prepare_batch(node, state) do
-    next_needed = Map.get(state.read_cursors, node, 0)
+    next_needed = Map.fetch!(state.read_cursors, node)
     buffer_size = :array.size(state.buffer)
     # How many messages this node is behind. Read cursor only advances *to*
     # write_cursor, so lag is always >= 0.
@@ -271,18 +339,9 @@ defmodule EchoPubSub.Producer do
     %{state | read_cursors: Map.put(state.read_cursors, node, target)}
   end
 
-  # Join and flush share dispatch_node/3 so the caught-up / replay / expired
-  # decision lives only in prepare_batch/2.
-  defp process_joined(pid, state) do
-    node = node(pid)
-
-    if Map.has_key?(state.read_cursors, node) do
-      dispatch_node(pid, node, state)
-    else
-      GenServer.call(pid, {:register, node()})
-      %{state | read_cursors: Map.put(state.read_cursors, node, state.write_cursor)}
-    end
-  end
+  # Join and flush share dispatch_node/3 so the register / deliver decision lives
+  # in one place.
+  defp process_joined(pid, state), do: dispatch_node(pid, node(pid), state)
 
   defp emit_expired(group, node, missed_messages) do
     :telemetry.execute(

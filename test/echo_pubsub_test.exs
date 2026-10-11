@@ -68,6 +68,93 @@ defmodule EchoPubSubTest do
     assert_peer_receive peer3, 2
   end
 
+  # Flushes are sent by hand (the timer never fires) so the batch window a new
+  # node joins during is deterministic.
+  test "a new node gets the unflushed batch window but nothing flushed before it joined" do
+    # 1. Two nodes; flushes only happen when sent by hand.
+    [peer1, peer2] = spawn_nodes(["window_node1", "window_node2"], batch_interval: 60_000)
+    remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer2, peer1)
+
+    # 2. m1 is flushed before peer3 exists.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :m1)
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
+    assert_peer_receive peer2, :m1
+
+    # 3. m2 waits in the unflushed window.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :m2)
+
+    # 4. peer3 joins and registers.
+    peer3 = spawn_node("window_node3", [peer1, peer2], batch_interval: 60_000)
+    remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    assert_registered(peer3, peer1)
+
+    # 5. m3 lands after registration, then flush.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :m3)
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
+
+    # 6. peer3 gets the window (m2, m3) but not m1.
+    assert_wait_for(5_000, fn ->
+      last_batch =
+        remote_run(peer3, do: GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch))
+
+      assert Enum.map(last_batch, &elem(&1, 2)) == [:m2, :m3]
+    end)
+  end
+
+  # peer1's outgoing calls fail while the fault is on, so peer2's registration
+  # keeps failing while m1 and m2 are flushed past it.
+  test "a failed registration retries from its first start cursor" do
+    # 1. peer1's outgoing calls fail.
+    [peer1] = spawn_nodes(["retry_node1"], batch_interval: 60_000)
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+
+    # 2. peer2 joins; its first registration fails with start cursor 0.
+    peer2 = spawn_node("retry_node2", [peer1], batch_interval: 60_000)
+    remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+
+    assert_wait_for(5_000, fn ->
+      registering =
+        remote_run peer1 do
+          :sys.get_state(PubSubTest.Adapter.Producer).registering
+        end
+
+      assert {nil, 0} = registering[peer2.node]
+    end)
+
+    # 3. m1, m2 are flushed past peer2 while it is unregistered.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :m1)
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :m2)
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
+
+    # 4. Fault cleared; the retry registers peer2, then flush.
+    remote_run peer1, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
+    assert_registered(peer2, peer1)
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
+
+    # 5. peer2 still gets m1 and m2.
+    assert_wait_for(5_000, fn ->
+      last_batch =
+        remote_run(peer2, do: GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch))
+
+      assert Enum.map(last_batch, &elem(&1, 2)) == [:m1, :m2]
+    end)
+  end
+
+  # Waits until `producer_peer`'s producer has a read cursor for `peer`: it has
+  # handled `peer`'s registration reply and will include it in flushes.
+  defp assert_registered(peer, producer_peer) do
+    assert_wait_for(5_000, fn ->
+      read_cursors =
+        remote_run producer_peer do
+          :sys.get_state(PubSubTest.Adapter.Producer).read_cursors
+        end
+
+      assert Map.has_key?(read_cursors, peer.node)
+    end)
+  end
+
   test "gets 'expired' message when read cursor is too old", %{peer1: peer1, peer2: peer2} do
     remote_run peer2, node: peer1.node do
       Node.disconnect(node)
@@ -392,6 +479,46 @@ defmodule EchoPubSubTest do
 
     assert_peer_receive peer2, :stalled
     assert_peer_receive peer2, :not_blocked
+  end
+
+  test "a restarted producer serves writes while a peer hangs on registration", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. peer2 hangs on every call.
+    remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    # 2. Restart peer1's producer; it must register with the hung peer2.
+    remote_run peer1 do
+      old = Process.whereis(PubSubTest.Adapter.Producer)
+      GenServer.stop(old, :normal)
+
+      # Wait for the supervisor to start the replacement.
+      Enum.find_value(1..100, fn _ ->
+        Process.sleep(10)
+        new = Process.whereis(PubSubTest.Adapter.Producer)
+        new != old && new
+      end)
+    end
+
+    # 3. A broadcast still returns at once.
+    elapsed_ms =
+      remote_run peer1 do
+        {micros, :ok} =
+          :timer.tc(fn -> Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_restart) end)
+
+        div(micros, 1000)
+      end
+
+    assert elapsed_ms < 1000,
+           "broadcast blocked for #{elapsed_ms}ms behind a peer hung on registration"
+
+    # 4. Once peer2 answers: cursor_expired first, then the message.
+    remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
+
+    node = peer1.node
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+    assert_peer_receive peer2, :after_restart
   end
 
   test "writes queued behind an in-flight batch arrive in order", %{peer1: peer1, peer2: peer2} do
