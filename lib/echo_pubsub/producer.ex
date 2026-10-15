@@ -18,8 +18,9 @@ defmodule EchoPubSub.Producer do
     * `write_cursor` - count of messages ever written; the next write lands here
     * `read_cursors` - map of node to its next-needed cursor; everything below it that node has acked.
       A node is absent until its registration is acked
-    * `registering` - map of node to the `{task reference, start cursor}` of its pending registration;
-      the reference is `nil` while a failed attempt waits for its retry
+    * `registering` - map of node to the `{task reference, start cursor, worker pid}` of its pending
+      registration; the reference is `nil` while a failed attempt waits for its retry
+    * `workers` - map of node to the worker pid this producer last registered with
     * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
@@ -33,7 +34,8 @@ defmodule EchoPubSub.Producer do
     field(:group, group())
     field(:write_cursor, cursor(), default: 0)
     field(:read_cursors, %{node() => cursor()})
-    field(:registering, %{node() => {reference() | nil, cursor()}}, default: %{})
+    field(:registering, %{node() => {reference() | nil, cursor(), pid()}}, default: %{})
+    field(:workers, %{node() => pid()}, default: %{})
     field(:in_flight, %{node() => {reference(), cursor()}}, default: %{})
     field(:buffer, :array.array())
     field(:batch_interval, timeout())
@@ -80,6 +82,7 @@ defmodule EchoPubSub.Producer do
       write_cursor: 0,
       read_cursors: %{},
       registering: %{},
+      workers: %{},
       in_flight: %{},
       buffer: :array.new(buffer_size),
       batch_interval: batch_interval,
@@ -116,6 +119,9 @@ defmodule EchoPubSub.Producer do
 
   @impl GenServer
   def handle_info(:flush_all, state) do
+    members = pg_members(state.group)
+    state = forget_departed(state, Enum.map(members, &node/1))
+
     min_read_cursor =
       state.read_cursors |> Map.values() |> Enum.min(fn -> state.write_cursor end)
 
@@ -132,9 +138,7 @@ defmodule EchoPubSub.Producer do
 
     # Phoenix PubSub handles local dispatch automatically via dispatch/5,
     # so we only send messages to remote nodes to avoid duplicate local delivery
-    remote_pids =
-      pg_members(state.group)
-      |> Enum.filter(&(node(&1) != node()))
+    remote_pids = Enum.filter(members, &(node(&1) != node()))
 
     state = Enum.reduce(remote_pids, state, &dispatch_node(&1, node(&1), &2))
 
@@ -150,9 +154,9 @@ defmodule EchoPubSub.Producer do
   @impl GenServer
   def handle_info({ref, result}, state) when is_reference(ref) do
     case find_task(state, ref) do
-      {:registration, node, start} ->
+      {:registration, node, start, pid} ->
         Process.demonitor(ref, [:flush])
-        {:noreply, apply_registration(state, node, start, result)}
+        {:noreply, apply_registration(state, node, start, pid, result)}
 
       {:delivery, node, target} ->
         Process.demonitor(ref, [:flush])
@@ -169,8 +173,8 @@ defmodule EchoPubSub.Producer do
   @impl GenServer
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case find_task(state, ref) do
-      {:registration, node, start} ->
-        {:noreply, apply_registration(state, node, start, :error)}
+      {:registration, node, start, pid} ->
+        {:noreply, apply_registration(state, node, start, pid, :error)}
 
       {:delivery, node, _target} ->
         state = %{state | in_flight: Map.delete(state.in_flight, node)}
@@ -192,14 +196,18 @@ defmodule EchoPubSub.Producer do
   defp dispatch_node(pid, node, state) do
     cond do
       registration_running?(state, node) or delivery_running?(state, node) -> state
-      not Map.has_key?(state.read_cursors, node) -> start_registration(pid, node, state)
+      needs_registration?(state, pid, node) -> start_registration(pid, node, state)
       true -> start_delivery(pid, node, prepare_batch(node, state), state)
     end
   end
 
   defp registration_running?(state, node) do
-    match?({:ok, {ref, _start}} when is_reference(ref), Map.fetch(state.registering, node))
+    match?({:ok, {ref, _start, _pid}} when is_reference(ref), Map.fetch(state.registering, node))
   end
+
+  # A node needs registering when this producer has never registered it, or when
+  # its worker has restarted since (a new pid that does not know this producer).
+  defp needs_registration?(state, pid, node), do: Map.get(state.workers, node) != pid
 
   defp delivery_running?(state, node), do: Map.has_key?(state.in_flight, node)
 
@@ -213,7 +221,7 @@ defmodule EchoPubSub.Producer do
         safe_call(pid, {:register, node()}, call_timeout, nil)
       end)
 
-    %{state | registering: Map.put(state.registering, node, {task.ref, start})}
+    %{state | registering: Map.put(state.registering, node, {task.ref, start, pid})}
   end
 
   # On the first attempt the node joins the current batch window: it starts at
@@ -223,22 +231,52 @@ defmodule EchoPubSub.Producer do
   # failing are still delivered.
   defp registration_start(state, node) do
     case Map.fetch(state.registering, node) do
-      {:ok, {nil, start}} -> start
+      {:ok, {nil, start, _pid}} -> start
       :error -> Map.get(state.read_cursors, node(), 0)
     end
   end
 
-  defp apply_registration(state, node, start, :ok) do
-    %{state | registering: Map.delete(state.registering, node)}
-    |> advance(node, start)
+  # A node registered again after a worker restart keeps its read cursor, so the
+  # messages its old worker missed are still replayed.
+  defp apply_registration(state, node, start, pid, :ok) do
+    %{
+      state
+      | registering: Map.delete(state.registering, node),
+        workers: Map.put(state.workers, node, pid),
+        read_cursors: Map.put_new(state.read_cursors, node, start)
+    }
     |> maybe_follow_up(node)
   end
 
-  # The node stays without a read cursor, so the retry flush registers it again
-  # from the same start.
-  defp apply_registration(state, node, start, :error) do
-    %{state | registering: Map.put(state.registering, node, {nil, start})}
+  # The node stays unregistered, so the retry flush registers it again from the
+  # same start.
+  defp apply_registration(state, node, start, pid, :error) do
+    %{state | registering: Map.put(state.registering, node, {nil, start, pid})}
     |> schedule_retry_flush()
+  end
+
+  # A node that left and fell more than a buffer behind could only be told it
+  # expired, so it is forgotten. If it comes back it registers again and its
+  # worker decides: one that still remembers this producer reports cursor_expired,
+  # a rebooted one starts fresh.
+  defp forget_departed(state, member_nodes) do
+    buffer_size = :array.size(state.buffer)
+
+    departed =
+      for {node, cursor} <- state.read_cursors,
+          node != node(),
+          node not in member_nodes,
+          not delivery_running?(state, node),
+          state.write_cursor - cursor > buffer_size do
+        node
+      end
+
+    %{
+      state
+      | read_cursors: Map.drop(state.read_cursors, departed),
+        workers: Map.drop(state.workers, departed),
+        registering: Map.drop(state.registering, departed)
+    }
   end
 
   defp start_delivery(_pid, _node, :caught_up, state), do: state
@@ -260,17 +298,14 @@ defmodule EchoPubSub.Producer do
   # never share a ref.
   defp find_task(state, ref) do
     case {find_entry(state.registering, ref), find_entry(state.in_flight, ref)} do
-      {{node, start}, nil} -> {:registration, node, start}
-      {nil, {node, target}} -> {:delivery, node, target}
+      {{node, {_ref, start, pid}}, nil} -> {:registration, node, start, pid}
+      {nil, {node, {_ref, target}}} -> {:delivery, node, target}
       {nil, nil} -> :unknown
     end
   end
 
   defp find_entry(tasks, ref) do
-    Enum.find_value(tasks, fn
-      {node, {^ref, cursor}} -> {node, cursor}
-      _ -> nil
-    end)
+    Enum.find(tasks, fn {_node, task} -> elem(task, 0) == ref end)
   end
 
   # A node skipped during a flush because it was mid-delivery still needs the

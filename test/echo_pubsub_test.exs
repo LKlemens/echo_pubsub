@@ -120,7 +120,7 @@ defmodule EchoPubSubTest do
           :sys.get_state(PubSubTest.Adapter.Producer).registering
         end
 
-      assert {nil, 0} = registering[peer2.node]
+      assert {nil, 0, _pid} = registering[peer2.node]
     end)
 
     # 3. m1, m2 are flushed past peer2 while it is unregistered.
@@ -217,6 +217,72 @@ defmodule EchoPubSubTest do
     node = peer1.node
     assert_peer_receive peer2, {:cursor_expired, ^node}
     refute_peer_receive peer2, {:cursor_expired, ^node}
+  end
+
+  test "forgets a departed node once it falls off the buffer", %{peer1: peer1, peer2: peer2} do
+    # 1. peer2 leaves peer1's :pg view.
+    remote_run peer2, node: peer1.node do
+      Node.disconnect(node)
+    end
+
+    # 2. buffer_size is 10; 12 messages put peer2 more than a buffer behind.
+    remote_run peer1 do
+      for i <- 1..12, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", i)
+    end
+
+    # 3. peer1's producer has forgotten peer2.
+    assert_wait_for(fn ->
+      read_cursors =
+        remote_run peer1 do
+          :sys.get_state(PubSubTest.Adapter.Producer).read_cursors
+        end
+
+      refute Map.has_key?(read_cursors, peer2.node)
+    end)
+
+    # 4. peer2 comes back: its worker still knows peer1, so it reports the gap,
+    #    then gets new messages.
+    remote_run peer2, node: peer1.node do
+      Node.connect(node)
+    end
+
+    node = peer1.node
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_return)
+    assert_peer_receive peer2, :after_return
+  end
+
+  test "registers a known node again when its worker restarts", %{peer1: peer1, peer2: peer2} do
+    # 1. peer2's worker, already registered by peer1, restarts with a new pid
+    #    that knows no producer.
+    assert_registered(peer2, peer1)
+
+    old_worker =
+      remote_run peer2 do
+        pid = Process.whereis(PubSubTest.Adapter.Worker)
+        Process.exit(pid, :kill)
+        pid
+      end
+
+    # 2. peer1's producer registers the new worker.
+    assert_wait_for(5_000, fn ->
+      registered? =
+        remote_run peer2, node: peer1.node, old_worker: old_worker do
+          new_worker = Process.whereis(PubSubTest.Adapter.Worker)
+
+          new_worker not in [nil, old_worker] and
+            GenServer.call(new_worker, {:registered?, node})
+        end
+
+      assert registered?
+    end)
+
+    # 3. peer1's producer restarts; the new worker knows it, so peer2 is told.
+    remote_run peer1, do: GenServer.stop(PubSubTest.Adapter.Producer, :normal)
+
+    node = peer1.node
+    assert_peer_receive peer2, {:cursor_expired, ^node}
   end
 
   test "messages are batched together within 200ms window" do
