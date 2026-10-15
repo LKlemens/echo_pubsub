@@ -95,12 +95,9 @@ defmodule EchoPubSubTest do
     remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
 
     # 6. peer3 gets the window (m2, m3) but not m1.
-    assert_wait_for(5_000, fn ->
-      last_batch =
-        remote_run(peer3, do: GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch))
-
-      assert Enum.map(last_batch, &elem(&1, 2)) == [:m2, :m3]
-    end)
+    assert_peer_receive peer3, :m2
+    assert_peer_receive peer3, :m3
+    refute_peer_receive peer3, :m1
   end
 
   # peer1's outgoing calls fail while the fault is on, so peer2's registration
@@ -134,12 +131,8 @@ defmodule EchoPubSubTest do
     remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
 
     # 5. peer2 still gets m1 and m2.
-    assert_wait_for(5_000, fn ->
-      last_batch =
-        remote_run(peer2, do: GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch))
-
-      assert Enum.map(last_batch, &elem(&1, 2)) == [:m1, :m2]
-    end)
+    assert_peer_receive peer2, :m1
+    assert_peer_receive peer2, :m2
   end
 
   # Waits until `producer_peer`'s producer has a read cursor for `peer`: it has
@@ -332,29 +325,22 @@ defmodule EchoPubSubTest do
     assert_peer_receive peer2, {:cursor_expired, ^node}
   end
 
-  test "messages are batched together within 200ms window" do
-    # spawn nodes with batch_interval: 200 for batching behavior
-    [peer1, peer2] = spawn_nodes(["batch_node1", "batch_node2"], batch_interval: 200)
+  test "messages broadcast within one batch window are sent together" do
+    # 1. Two nodes; the batch timer never fires, so flushes happen by hand.
+    [peer1, peer2] = spawn_nodes(["batch_node1", "batch_node2"], batch_interval: 60_000)
+    remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer2, peer1)
 
-    remote_run peer2 do
-      EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
-    end
-
-    # send messages rapidly (within 200ms window)
+    # 2. Both messages are held until the flush.
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg1)
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :batch_msg2)
+    refute_peer_receive peer2, :batch_msg1
+    refute_peer_receive peer2, :batch_msg2
 
-    # wait for batch to arrive
+    # 3. One flush delivers both.
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
     assert_peer_receive peer2, :batch_msg1
     assert_peer_receive peer2, :batch_msg2
-
-    # verify messages were sent in a single batch
-    last_batch =
-      remote_run peer2 do
-        GenServer.call(PubSubTest.Adapter.Worker, :get_last_batch)
-      end
-
-    assert length(last_batch) >= 2, "Expected batched messages, got: #{inspect(last_batch)}"
   end
 
   test "does not send duplicated messages to the broadcasting node", %{peer1: peer1, peer2: peer2} do

@@ -20,7 +20,7 @@ defmodule EchoPubSub.Worker do
   @impl true
   def init({name, group}) do
     :ok = pg_join(group)
-    {:ok, %{pubsub: name, registrations: registrations_table(group), last_batch: []}}
+    {:ok, %{pubsub: name, registrations: registrations_table(group)}}
   end
 
   @impl true
@@ -31,8 +31,6 @@ defmodule EchoPubSub.Worker do
 
   @impl true
   def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
-    state = %{state | last_batch: messages}
-
     if FaultInjection.ok?() do
       deliver_batch(messages, from, state)
       {:reply, :ok, state}
@@ -60,16 +58,6 @@ defmodule EchoPubSub.Worker do
 
     :ets.insert(state.registrations, {node})
     {:reply, :ok, state}
-  end
-
-  @impl true
-  def handle_call({:registered?, node}, _from, state) do
-    {:reply, registered?(state, node), state}
-  end
-
-  @impl true
-  def handle_call(:get_last_batch, _from, state) do
-    {:reply, state.last_batch, state}
   end
 
   @impl true
