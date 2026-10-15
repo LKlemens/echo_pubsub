@@ -156,6 +156,10 @@ defmodule EchoPubSub do
 
     :persistent_term.put(adapter_name, List.to_tuple(groups))
 
+    for group <- groups do
+      :ets.new(Worker.registrations_table(group), [:set, :public, :named_table])
+    end
+
     children =
       Enum.flat_map(groups, fn group ->
         producer_id = Module.concat(group, :Producer)

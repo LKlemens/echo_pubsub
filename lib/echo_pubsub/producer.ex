@@ -258,7 +258,7 @@ defmodule EchoPubSub.Producer do
   # A node that left and fell more than a buffer behind could only be told it
   # expired, so it is forgotten. If it comes back it registers again and its
   # worker decides: one that still remembers this producer reports cursor_expired,
-  # a rebooted one starts fresh.
+  # a rebooted one starts fresh. The worker's memory survives a worker restart.
   defp forget_departed(state, member_nodes) do
     buffer_size = :array.size(state.buffer)
 

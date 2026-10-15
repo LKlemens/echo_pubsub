@@ -8,10 +8,19 @@ defmodule EchoPubSub.Worker do
     GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
   end
 
+  @doc """
+  Names the table of producer nodes registered with this group's worker.
+
+  The adapter supervisor owns the table, so a restarted worker still knows which
+  producers registered before and can tell them apart from new ones.
+  """
+  @spec registrations_table(atom()) :: atom()
+  def registrations_table(group), do: Module.concat(group, Registrations)
+
   @impl true
   def init({name, group}) do
     :ok = pg_join(group)
-    {:ok, %{pubsub: name, registrations: MapSet.new(), last_batch: []}}
+    {:ok, %{pubsub: name, registrations: registrations_table(group), last_batch: []}}
   end
 
   @impl true
@@ -36,6 +45,9 @@ defmodule EchoPubSub.Worker do
   def handle_call({:expired, node}, _from, state) do
     if FaultInjection.ok?() do
       broadcast_expired_message(state.pubsub, node)
+      # A producer that forgot this node reaches it here, not through :register,
+      # so record it to still report a later restart of that producer.
+      :ets.insert(state.registrations, {node})
       {:reply, :ok, state}
     else
       {:reply, :error, state}
@@ -44,15 +56,15 @@ defmodule EchoPubSub.Worker do
 
   @impl true
   def handle_call({:register, node}, _from, state) do
-    if MapSet.member?(state.registrations, node),
-      do: broadcast_expired_message(state.pubsub, node)
+    if registered?(state, node), do: broadcast_expired_message(state.pubsub, node)
 
-    {:reply, :ok, %{state | registrations: MapSet.put(state.registrations, node)}}
+    :ets.insert(state.registrations, {node})
+    {:reply, :ok, state}
   end
 
   @impl true
   def handle_call({:registered?, node}, _from, state) do
-    {:reply, MapSet.member?(state.registrations, node), state}
+    {:reply, registered?(state, node), state}
   end
 
   @impl true
@@ -64,6 +76,8 @@ defmodule EchoPubSub.Worker do
   def handle_call(_, _from, state) do
     {:reply, {:error, :bad_message}, state}
   end
+
+  defp registered?(state, node), do: :ets.member(state.registrations, node)
 
   defp deliver_batch(messages, from, state) do
     Enum.each(messages, fn message -> handle_call(message, from, state) end)
