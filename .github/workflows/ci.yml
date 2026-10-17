@@ -76,8 +76,10 @@ jobs:
         mix deps.get
         mix deps.compile
 
-    - name: Run tests
-      run: mix test
+    - name: Run tests with coverage
+      run: mix coveralls.github
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   static_code_analysis:
     name: Static Code Analysis
