@@ -9,6 +9,9 @@ defmodule EchoPubSub.CapacityWarningTest do
       EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
+    # peer2 must hold a read cursor on peer1, or nothing counts as buffered for it.
+    assert_registered(peer2, peer1)
+
     # Disconnect peer2 so messages accumulate in buffer
     remote_run peer2, node: peer1.node do
       Node.disconnect(node)
@@ -25,7 +28,8 @@ defmodule EchoPubSub.CapacityWarningTest do
 
           # Force flush to trigger the warning check
           send(PubSubTest.Adapter.Producer, :flush_all)
-          Process.sleep(50)
+          # A call returns only after the producer has handled the flush.
+          :sys.get_state(PubSubTest.Adapter.Producer)
         end)
       end
 
@@ -40,6 +44,8 @@ defmodule EchoPubSub.CapacityWarningTest do
       EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
+    assert_registered(peer2, peer1)
+
     remote_run peer2, node: peer1.node do
       Node.disconnect(node)
     end
@@ -53,7 +59,8 @@ defmodule EchoPubSub.CapacityWarningTest do
           end
 
           send(PubSubTest.Adapter.Producer, :flush_all)
-          Process.sleep(50)
+          # A call returns only after the producer has handled the flush.
+          :sys.get_state(PubSubTest.Adapter.Producer)
         end)
       end
 

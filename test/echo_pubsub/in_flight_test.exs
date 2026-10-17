@@ -1,7 +1,8 @@
 defmodule EchoPubSub.InFlightTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   # A suspended worker accepts the delivery call but never answers it, so the
   # producer's call runs the full :call_timeout - an unresponsive peer that never

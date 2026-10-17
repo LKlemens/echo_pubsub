@@ -1,7 +1,8 @@
 defmodule EchoPubSub.RetryCyclesTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   test "message delivery succeeds after multiple retry cycles", %{peer1: peer1, peer2: peer2} do
     # Make peer2's worker reject messages

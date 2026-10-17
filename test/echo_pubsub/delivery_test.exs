@@ -1,7 +1,8 @@
 defmodule EchoPubSub.DeliveryTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   doctest EchoPubSub
 

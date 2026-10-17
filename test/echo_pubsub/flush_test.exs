@@ -1,7 +1,8 @@
 defmodule EchoPubSub.FlushTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   test "does not send duplicated messages to the broadcasting node", %{peer1: peer1, peer2: peer2} do
     # peer1 subscribes to the same topic it will broadcast to

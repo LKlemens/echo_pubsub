@@ -1,7 +1,8 @@
 defmodule EchoPubSub.RegistrationTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   test "registers a known node again when its worker restarts", %{peer1: peer1, peer2: peer2} do
     # 1. peer2's worker, already registered by peer1, restarts with a new pid.

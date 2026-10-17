@@ -2,8 +2,9 @@ defmodule EchoPubSub.ClusterCase do
   @moduledoc """
   Case template for tests that run against a cluster of peer nodes.
 
-  Each module sets up its own peers, either with `setup :start_peers` or by
-  spawning them in its tests.
+  Each module sets up its own peers: either it shares one pair across its tests
+  with `setup_all :start_shared_peers` and `setup :reset_peers`, or its tests
+  spawn their own.
   """
   use ExUnit.CaseTemplate
 
@@ -17,20 +18,55 @@ defmodule EchoPubSub.ClusterCase do
   end
 
   @doc """
-  Starts two connected peers, `peer1` and `peer2`, with `peer2` subscribed to
-  "topic". Use as `setup :start_peers`.
+  Starts two connected peers, `peer1` and `peer2`, shared by every test in the
+  module. Use as `setup_all :start_shared_peers`, together with
+  `setup :reset_peers`.
   """
-  @spec start_peers(map()) :: %{peer1: map(), peer2: map()}
-  def start_peers(_context) do
+  @spec start_shared_peers(map()) :: %{peer1: map(), peer2: map()}
+  def start_shared_peers(_context) do
     # Expiry/overflow tests intentionally fill the buffer; capacity warnings are
     # exercised separately, so disable them here to keep test output clean.
     [peer1, peer2] = spawn_nodes(["node1", "node2"], capacity_warning_threshold: 2.0)
+    subscribe_and_wait(peer1, peer2)
+    %{peer1: peer1, peer2: peer2}
+  end
 
+  @doc """
+  Puts the shared peers back in their default state after each test. Use as
+  `setup :reset_peers`.
+
+  Restarting the PubSub tree is the one reset that clears everything a test can
+  leave behind: buffers, cursors, registrations, killed or suspended processes
+  and subscriber messages.
+  """
+  @spec reset_peers(map()) :: :ok
+  def reset_peers(%{peer1: peer1, peer2: peer2}) do
+    ExUnit.Callbacks.on_exit(fn ->
+      peers = [peer1, peer2]
+
+      for peer <- peers do
+        remote_run peer, nodes: Enum.map(peers, & &1.node) do
+          Application.put_env(:echo_pubsub, :fault_injection, :ok)
+          Enum.each(nodes, &Node.connect/1)
+        end
+      end
+
+      # Every tree stops before any starts again: a worker that survived would
+      # remember the other producer and report a stray cursor_expired.
+      for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.stop_children())
+      for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.start_children())
+
+      subscribe_and_wait(peer1, peer2)
+    end)
+  end
+
+  defp subscribe_and_wait(peer1, peer2) do
     remote_run peer2 do
       EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
     end
 
-    %{peer1: peer1, peer2: peer2}
+    assert_registered(peer2, peer1)
+    assert_registered(peer1, peer2)
   end
 
   @doc """

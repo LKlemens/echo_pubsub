@@ -92,10 +92,36 @@ defmodule EchoPubSub.Cluster do
       assert_wait_for(max(0, timeout - 10), fun)
   end
 
+  @doc "Stops the PubSub server and TestSubscriber on the calling node, newest first."
+  def stop_children do
+    for {id, _pid, _type, _modules} <- Supervisor.which_children(EchoPubSub.TestSupervisor) do
+      :ok = Supervisor.terminate_child(EchoPubSub.TestSupervisor, id)
+    end
+
+    :ok
+  end
+
+  @doc "Starts the children stopped by stop_children/0 again, oldest first."
+  def start_children do
+    for {id, _pid, _type, _modules} <-
+          Enum.reverse(Supervisor.which_children(EchoPubSub.TestSupervisor)) do
+      {:ok, _pid} = Supervisor.restart_child(EchoPubSub.TestSupervisor, id)
+    end
+
+    :ok
+  end
+
   def spawn_node(name, nodes, opts \\ []) do
     # Async test modules boot peers at the same time, so names must never repeat.
     name = "#{name}_#{System.unique_integer([:positive])}"
-    {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
+    # Tests cut single links on purpose; without this, 'global' would cut more
+    # links to stop the cluster splitting into overlapping partitions.
+    {:ok, pid, node} =
+      :peer.start_link(%{
+        name: ~c"#{name}",
+        connection: :standard_io,
+        args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
+      })
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
     connect_to_cluster(pid, nodes)

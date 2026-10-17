@@ -1,7 +1,8 @@
 defmodule EchoPubSub.ExpiryTest do
   use EchoPubSub.ClusterCase, async: true
 
-  setup :start_peers
+  setup_all :start_shared_peers
+  setup :reset_peers
 
   test "gets 'expired' message when read cursor is too old", %{peer1: peer1, peer2: peer2} do
     remote_run peer2, node: peer1.node do
