@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 - 2026-10-18
+### Fixed
+- A worker that keeps crashing no longer restarts its producer: each group's
+  producer and worker now have their own supervisors, so the producer keeps its
+  buffer and peers get no `{:cursor_expired, node}`.
+
 ## v0.2.0 - 2026-10-17
 ### Fixed
 - A peer that hangs right after joining can no longer stall or crash the producer:

@@ -59,18 +59,7 @@ defmodule EchoPubSub.PropertyTest do
         {1, tuple({constant(:disconnect), peer, peer}) |> filter(fn {_, a, b} -> a != b end)}
       ])
 
-    step
-    |> list_of(min_length: 1, max_length: 30)
-    |> filter(&within_restart_limit?/1)
-  end
-
-  # A fourth worker crash within 5 s exceeds the adapter supervisor's restart
-  # limit and takes the producer down with it, losing its buffer.
-  defp within_restart_limit?(schedule) do
-    schedule
-    |> Enum.filter(&match?({:kill_worker, _}, &1))
-    |> Enum.frequencies()
-    |> Enum.all?(fn {_kill, count} -> count <= 3 end)
+    list_of(step, min_length: 1, max_length: 30)
   end
 
   # Plays each step and returns how many messages each producer index sent.

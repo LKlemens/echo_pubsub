@@ -9,7 +9,7 @@ defmodule EchoPubSub do
   You will also need to add `:echo_pubsub` to your deps:
 
       defp deps do
-        [{:echo_pubsub, "~> 0.2.0"}]
+        [{:echo_pubsub, "~> 0.2.1"}]
       end
 
   ## Options
@@ -148,16 +148,36 @@ defmodule EchoPubSub do
     :ets.new(Worker.registrations_table(group), [:set, :public, :named_table])
   end
 
+  # Each side restarts under its own limit, so a crash-looping worker cannot take
+  # the producer, and with it the buffer every peer replays from, down too.
   @spec group_children(atom(), atom(), Options.t()) :: [Supervisor.child_spec()]
   defp group_children(group, name, options) do
     producer_opts = [group: group] ++ Map.to_list(Map.delete(options, :pool_size))
 
-    [
+    producer_side = [
       Supervisor.child_spec({Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
         id: Module.concat(group, :TaskSupervisor)
       ),
-      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer)),
+      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer))
+    ]
+
+    worker_side = [
       Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
     ]
+
+    [
+      supervisor_spec(Module.concat(group, ProducerSupervisor), producer_side, :rest_for_one),
+      supervisor_spec(Module.concat(group, WorkerSupervisor), worker_side, :one_for_one)
+    ]
+  end
+
+  @spec supervisor_spec(atom(), [Supervisor.child_spec()], Supervisor.strategy()) ::
+          Supervisor.child_spec()
+  defp supervisor_spec(name, children, strategy) do
+    %{
+      id: name,
+      start: {Supervisor, :start_link, [children, [strategy: strategy, name: name]]},
+      type: :supervisor
+    }
   end
 end

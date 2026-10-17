@@ -12,7 +12,8 @@ defmodule EchoPubSub.RegistrationTest do
 
     # 2. peer1's worker stops and stays down (a kill would restart it at once).
     remote_run peer1 do
-      :ok = Supervisor.terminate_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+      :ok =
+        Supervisor.terminate_child(PubSubTest.Adapter.WorkerSupervisor, PubSubTest.Adapter.Worker)
     end
 
     # 3. A local broadcast never goes through the worker: peer1 gets it at once.
@@ -27,7 +28,7 @@ defmodule EchoPubSub.RegistrationTest do
     # 5. The worker is back: peer2 resumes it and replays the message, no notice.
     remote_run peer1 do
       {:ok, _pid} =
-        Supervisor.restart_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+        Supervisor.restart_child(PubSubTest.Adapter.WorkerSupervisor, PubSubTest.Adapter.Worker)
     end
 
     messages = receive_until(peer1, :remote_while_down)
@@ -76,7 +77,8 @@ defmodule EchoPubSub.RegistrationTest do
 
     # 2. peer1's worker stops and stays down; peer1 stays connected.
     remote_run peer1 do
-      :ok = Supervisor.terminate_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+      :ok =
+        Supervisor.terminate_child(PubSubTest.Adapter.WorkerSupervisor, PubSubTest.Adapter.Worker)
     end
 
     # 3. buffer_size is 10; 12 messages overwrite some peer1 never got, so
@@ -97,7 +99,7 @@ defmodule EchoPubSub.RegistrationTest do
     # 4. The worker is back; it still remembers peer2, so it reports the gap.
     remote_run peer1 do
       {:ok, _pid} =
-        Supervisor.restart_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+        Supervisor.restart_child(PubSubTest.Adapter.WorkerSupervisor, PubSubTest.Adapter.Worker)
     end
 
     node = peer2.node
@@ -147,6 +149,41 @@ defmodule EchoPubSub.RegistrationTest do
     remote_run peer2, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :from_peer2)
     assert_peer_receive peer1, :from_peer1
     assert_peer_receive peer1, :from_peer2
+  end
+
+  test "a crash-looping worker leaves its producer and buffer alone", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. peer2 is subscribed and registered with peer1's producer.
+    assert_registered(peer2, peer1)
+    producer = remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer))
+
+    # 2. peer1's worker crashes five times in a row, past the restart limit of
+    #    its own supervisor.
+    for _ <- 1..5 do
+      old_worker =
+        remote_run peer1 do
+          pid = Process.whereis(PubSubTest.Adapter.Worker)
+          Process.exit(pid, :kill)
+          pid
+        end
+
+      assert_wait_for(fn ->
+        new_worker =
+          remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Worker))
+
+        assert new_worker && new_worker != old_worker
+      end)
+    end
+
+    # 3. The producer kept running, so peer2 is told nothing and still gets
+    #    peer1's broadcasts.
+    assert remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer)) == producer
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_crashes)
+    messages = receive_until(peer2, :after_crashes)
+    refute Enum.any?(messages, &match?({:cursor_expired, _}, &1))
   end
 
   test "registers a known node again when its worker restarts", %{peer1: peer1, peer2: peer2} do
