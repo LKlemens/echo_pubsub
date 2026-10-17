@@ -1,6 +1,8 @@
 defmodule EchoPubSubOptionsTest do
   use ExUnit.Case, async: true
 
+  doctest EchoPubSub.Options
+
   @required [name: OptionsTest, adapter_name: OptionsTest.Adapter]
 
   # Validation runs before init starts anything, so rejected cases need no cleanup.

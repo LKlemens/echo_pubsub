@@ -79,6 +79,7 @@ defmodule EchoPubSub do
 
   use Supervisor
 
+  alias EchoPubSub.Options
   alias EchoPubSub.Producer
   alias EchoPubSub.Worker
   alias Phoenix.PubSub.Adapter
@@ -99,8 +100,8 @@ defmodule EchoPubSub do
   @impl Adapter
   def direct_broadcast(adapter_name, node_name, topic, message, dispatcher) do
     GenServer.call(
-      {Module.concat(group(adapter_name), :Worker), node_name},
-      {:forward_to_local, topic, message, dispatcher}
+      {Worker.name(group(adapter_name)), node_name},
+      forward_to_local(topic, message, dispatcher)
     )
   end
 
@@ -125,96 +126,38 @@ defmodule EchoPubSub do
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
     adapter_name = Keyword.fetch!(opts, :adapter_name)
+    options = Options.resolve!(opts, Application.get_env(:echo_pubsub, name, []))
 
-    # Read from Application config, with opts taking precedence
-    config = Application.get_env(:echo_pubsub, name, [])
-    pool_size = Keyword.get(opts, :pool_size) || Keyword.get(config, :pool_size, 1)
-    buffer_size = Keyword.get(opts, :buffer_size) || Keyword.get(config, :buffer_size, 10_000)
-
-    batch_interval =
-      Keyword.get(opts, :batch_interval) || Keyword.get(config, :batch_interval, 200)
-
-    call_timeout =
-      Keyword.get(opts, :call_timeout) || Keyword.get(config, :call_timeout, 5000)
-
-    capacity_warning_threshold =
-      Keyword.get(opts, :capacity_warning_threshold) ||
-        Keyword.get(config, :capacity_warning_threshold, 0.4)
-
-    capacity_warning_interval =
-      Keyword.get(opts, :capacity_warning_interval) ||
-        Keyword.get(config, :capacity_warning_interval, 60)
-
-    validate!(:pool_size, pool_size, &pos_integer?/1, "a positive integer")
-    validate!(:buffer_size, buffer_size, &pos_integer?/1, "a positive integer")
-    validate!(:call_timeout, call_timeout, &pos_integer?/1, "a positive integer")
-    validate!(:batch_interval, batch_interval, &non_neg_integer?/1, "a non-negative integer")
-
-    validate!(
-      :capacity_warning_interval,
-      capacity_warning_interval,
-      &non_neg_integer?/1,
-      "a non-negative integer"
-    )
-
-    validate!(
-      :capacity_warning_threshold,
-      capacity_warning_threshold,
-      &(is_number(&1) and &1 >= 0),
-      "a non-negative number"
-    )
-
-    [_ | groups] =
-      for number <- 1..pool_size do
-        :"#{adapter_name}#{number}"
-      end
-
-    # Use `adapter_name` for the first in the pool for backwards compatability
-    # with v2.0 when the pool_size is 1.
-    groups = [adapter_name | groups]
-
+    groups = groups(adapter_name, options.pool_size)
     :persistent_term.put(adapter_name, List.to_tuple(groups))
+    Enum.each(groups, &create_registrations_table/1)
 
-    for group <- groups do
-      :ets.new(Worker.registrations_table(group), [:set, :public, :named_table])
-    end
-
-    children =
-      Enum.flat_map(groups, fn group ->
-        producer_id = Module.concat(group, :Producer)
-
-        [
-          Supervisor.child_spec(
-            {Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
-            id: Module.concat(group, :TaskSupervisor)
-          ),
-          Supervisor.child_spec(
-            {Producer,
-             {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
-              capacity_warning_interval, group}},
-            id: producer_id
-          ),
-          Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
-        ]
-      end)
-
+    children = Enum.flat_map(groups, &group_children(&1, name, options))
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  # A bad value would otherwise crash far from its cause, e.g. buffer_size: 0 in
-  # rem/2 on the first write.
-  @spec validate!(atom(), term(), (term() -> boolean()), String.t()) :: :ok
-  defp validate!(option, value, valid?, expected) do
-    if valid?.(value) do
-      :ok
-    else
-      raise ArgumentError, "expected #{inspect(option)} to be #{expected}, got: #{inspect(value)}"
-    end
+  # Like PG2: `adapter_name`, `adapter_name2`... All nodes need the same pool_size.
+  @spec groups(atom(), pos_integer()) :: [atom()]
+  defp groups(adapter_name, pool_size) do
+    [adapter_name | for(number <- 2..pool_size//1, do: :"#{adapter_name}#{number}")]
   end
 
-  @spec pos_integer?(term()) :: boolean()
-  defp pos_integer?(value), do: is_integer(value) and value > 0
+  # Owned by this supervisor, so it outlives worker restarts.
+  @spec create_registrations_table(atom()) :: atom()
+  defp create_registrations_table(group) do
+    :ets.new(Worker.registrations_table(group), [:set, :public, :named_table])
+  end
 
-  @spec non_neg_integer?(term()) :: boolean()
-  defp non_neg_integer?(value), do: is_integer(value) and value >= 0
+  @spec group_children(atom(), atom(), Options.t()) :: [Supervisor.child_spec()]
+  defp group_children(group, name, options) do
+    producer_opts = [group: group] ++ Map.to_list(Map.delete(options, :pool_size))
+
+    [
+      Supervisor.child_spec({Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
+        id: Module.concat(group, :TaskSupervisor)
+      ),
+      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer)),
+      Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
+    ]
+  end
 end
