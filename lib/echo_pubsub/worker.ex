@@ -57,9 +57,6 @@ defmodule EchoPubSub.Worker do
   def handle_call({:expired, node}, _from, state) do
     FaultInjection.if_ok do
       broadcast_expired_message(state.pubsub, node)
-      # A producer that forgot this node reaches it here, not through :register,
-      # so record it to still report a later restart of that producer.
-      :ets.insert(state.registrations, {node})
       {:reply, :ok, state}
     else
       {:reply, :error, state}
