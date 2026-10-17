@@ -42,22 +42,30 @@ defmodule EchoPubSub.ClusterCase do
   @spec reset_peers(map()) :: :ok
   def reset_peers(%{peer1: peer1, peer2: peer2}) do
     ExUnit.Callbacks.on_exit(fn ->
-      peers = [peer1, peer2]
-
-      for peer <- peers do
-        remote_run peer, nodes: Enum.map(peers, & &1.node) do
-          Application.put_env(:echo_pubsub, :fault_injection, :ok)
-          Enum.each(nodes, &Node.connect/1)
-        end
-      end
-
-      # Every tree stops before any starts again: a worker that survived would
-      # remember the other producer and report a stray cursor_expired.
-      for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.stop_children())
-      for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.start_children())
-
+      restart_cluster([peer1, peer2])
       subscribe_and_wait(peer1, peer2)
     end)
+  end
+
+  @doc """
+  Clears faults, reconnects every peer and restarts each PubSub tree, which also
+  drops the subscribers' messages and subscriptions.
+  """
+  @spec restart_cluster([map()]) :: :ok
+  def restart_cluster(peers) do
+    for peer <- peers do
+      remote_run peer, nodes: Enum.map(peers, & &1.node) do
+        Application.put_env(:echo_pubsub, :fault_injection, :ok)
+        Enum.each(nodes, &Node.connect/1)
+      end
+    end
+
+    # Every tree stops before any starts again: a worker that survived would
+    # remember the other producer and report a stray cursor_expired.
+    for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.stop_children())
+    for peer <- peers, do: remote_run(peer, do: EchoPubSub.Cluster.start_children())
+
+    :ok
   end
 
   defp subscribe_and_wait(peer1, peer2) do

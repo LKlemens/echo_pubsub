@@ -1,6 +1,7 @@
 # EchoPubSub
 
 [![CI](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml/badge.svg)](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/LKlemens/echo_pubsub/badge.svg?branch=main)](https://coveralls.io/github/LKlemens/echo_pubsub?branch=main)
 [![hex.pm version](https://img.shields.io/hexpm/v/echo_pubsub.svg)](https://hex.pm/packages/echo_pubsub)
 [![hex.pm license](https://img.shields.io/hexpm/l/echo_pubsub.svg)](https://github.com/LKlemens/echo_pubsub/blob/main/LICENSE)
 
@@ -82,7 +83,7 @@ for worked examples.
 ```elixir
 def deps do
   [
-    {:echo_pubsub, "~> 0.1.0"}
+    {:echo_pubsub, "~> 0.2.1"}
   ]
 end
 ```

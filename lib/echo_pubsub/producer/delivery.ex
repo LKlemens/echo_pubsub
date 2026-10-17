@@ -4,8 +4,8 @@ defmodule EchoPubSub.Producer.Delivery do
   to the batch's target only when its worker acks, so a failed batch is resent.
   """
 
-  alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Remote
+  alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Telemetry
   alias EchoPubSub.Producer.Timers
 

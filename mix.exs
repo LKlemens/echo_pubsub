@@ -2,7 +2,7 @@ defmodule EchoPubSub.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/LKlemens/echo_pubsub"
-  @version "0.1.7"
+  @version "0.2.1"
 
   def project do
     [
@@ -11,6 +11,7 @@ defmodule EchoPubSub.MixProject do
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      test_coverage: [tool: ExCoveralls],
       deps: deps(),
       dialyzer: [
         plt_local_path: "priv/plts",
@@ -40,15 +41,23 @@ defmodule EchoPubSub.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [coveralls: :test, "coveralls.html": :test, "coveralls.github": :test]]
+  end
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger] ++ test_applications(Mix.env())
     ]
   end
+
+  # :tools provides :cover, which the test cluster uses in coverage runs.
+  defp test_applications(:test), do: [:tools]
+  defp test_applications(_), do: []
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
@@ -58,7 +67,9 @@ defmodule EchoPubSub.MixProject do
       {:typed_struct, "~> 0.3", runtime: false},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:excoveralls, "~> 0.18", only: :test},
+      {:stream_data, "~> 1.1", only: :test}
     ]
   end
 end

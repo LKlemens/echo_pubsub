@@ -14,9 +14,6 @@ concurrency:
   group: ${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
-env:
-  MIX_ENV: test
-
 jobs:
   build:
     name: Build
@@ -53,6 +50,8 @@ jobs:
     name: Test
     needs: build
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
     steps:
     - uses: actions/checkout@v4
 
@@ -77,8 +76,10 @@ jobs:
         mix deps.get
         mix deps.compile
 
-    - name: Run tests
-      run: mix test
+    - name: Run tests with coverage
+      run: mix coveralls.github
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   static_code_analysis:
     name: Static Code Analysis
@@ -112,7 +113,7 @@ jobs:
       run: mix format --check-formatted
 
     - name: Credo
-      run: mix credo
+      run: mix credo --strict
 
   dialyzer:
     name: Dialyzer
@@ -147,9 +148,9 @@ jobs:
       uses: actions/cache@v4
       with:
         path: priv/plts
-        key: ${{ runner.os }}-plt-${{ hashFiles('.tool-versions', 'mix.lock') }}
+        key: ${{ runner.os }}-plt-dev-${{ hashFiles('.tool-versions', 'mix.lock') }}
         restore-keys: |
-          ${{ runner.os }}-plt-
+          ${{ runner.os }}-plt-dev-
 
     - name: Create PLTs
       if: steps.plt-cache.outputs.cache-hit != 'true'

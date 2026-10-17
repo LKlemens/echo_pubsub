@@ -1,5 +1,6 @@
 defmodule EchoPubSub.Cluster do
   @moduledoc "Test helpers for spawning peer nodes and asserting on messages across a cluster."
+
   def spawn_nodes(node_names, opts \\ []) do
     node_names
     |> Enum.reduce([], fn name, nodes -> [spawn_node(name, nodes, opts) | nodes] end)
@@ -116,12 +117,8 @@ defmodule EchoPubSub.Cluster do
     name = "#{name}_#{System.unique_integer([:positive])}"
     # Tests cut single links on purpose; without this, 'global' would cut more
     # links to stop the cluster splitting into overlapping partitions.
-    {:ok, pid, node} =
-      :peer.start_link(%{
-        name: ~c"#{name}",
-        connection: :standard_io,
-        args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
-      })
+    args = [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
+    {pid, node} = start_peer(%{name: ~c"#{name}", connection: :standard_io, args: args})
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
     connect_to_cluster(pid, nodes)
@@ -130,6 +127,30 @@ defmodule EchoPubSub.Cluster do
 
     %{node: node, pid: pid}
   end
+
+  # With coverage on (see test_helper.exs), the peer runs the cover-compiled
+  # modules and reports back before it stops. A linked peer would die with the
+  # test process before on_exit could flush its data, so it is stopped there.
+  defp start_peer(options) do
+    if cover_running?() do
+      cookie = Atom.to_charlist(Node.get_cookie())
+      {:ok, pid, node} = :peer.start(%{options | args: options.args ++ [~c"-setcookie", cookie]})
+      true = Node.connect(node)
+      {:ok, _node} = :cover.start(node)
+
+      ExUnit.Callbacks.on_exit(fn ->
+        :cover.flush(node)
+        :peer.stop(pid)
+      end)
+
+      {pid, node}
+    else
+      {:ok, pid, node} = :peer.start_link(options)
+      {pid, node}
+    end
+  end
+
+  defp cover_running?, do: Node.alive?() and Process.whereis(:cover_server) != nil
 
   defp connect_to_cluster(pid, [%{node: last_node} | _]) do
     :peer.call(pid, :net_kernel, :connect_node, [last_node])
