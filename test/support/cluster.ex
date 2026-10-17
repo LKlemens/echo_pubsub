@@ -93,6 +93,8 @@ defmodule EchoPubSub.Cluster do
   end
 
   def spawn_node(name, nodes, opts \\ []) do
+    # Async test modules boot peers at the same time, so names must never repeat.
+    name = "#{name}_#{System.unique_integer([:positive])}"
     {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
@@ -121,16 +123,16 @@ defmodule EchoPubSub.Cluster do
     end)
   end
 
-  # Dev/test build tooling that has no business running on a test peer node.
-  @skip_apps [:dialyxir, :credo, :ex_doc, :erlex]
+  # Only what a peer runs: the library itself, ExUnit for CaptureLog, and Mix for
+  # Mix.env. Starting every loaded app (hex, ssl, credo...) slows each boot.
+  @peer_apps [:mix, :ex_unit, :echo_pubsub]
 
   defp start_apps(pid, opts) do
-    :peer.call(pid, Application, :ensure_all_started, [:mix])
-    :peer.call(pid, Mix, :env, [Mix.env()])
-
-    for {app_name, _, _} <- Application.loaded_applications(), app_name not in @skip_apps do
-      :peer.call(pid, Application, :ensure_all_started, [app_name])
+    for app_name <- @peer_apps do
+      {:ok, _} = :peer.call(pid, Application, :ensure_all_started, [app_name])
     end
+
+    :peer.call(pid, Mix, :env, [Mix.env()])
 
     batch_interval = Keyword.get(opts, :batch_interval, 0)
     capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
