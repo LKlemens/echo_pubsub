@@ -18,9 +18,15 @@ defmodule EchoPubSub.Worker do
 
   require EchoPubSub.FaultInjection, as: FaultInjection
 
+  @doc "Starts the worker for `group`, broadcasting batches to the `name` PubSub server."
+  @spec start_link({atom(), atom()}) :: GenServer.on_start()
   def start_link({name, group}) do
-    GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
+    GenServer.start_link(__MODULE__, {name, group}, name: name(group))
   end
+
+  @doc "The registered name of the group's worker."
+  @spec name(atom()) :: atom()
+  def name(group), do: Module.concat(group, Worker)
 
   @doc """
   Names the table of producer nodes registered with this group's worker.
@@ -38,15 +44,15 @@ defmodule EchoPubSub.Worker do
   end
 
   @impl true
-  def handle_call({:forward_to_local, topic, message, dispatcher}, _from, state) do
-    Phoenix.PubSub.local_broadcast(state.pubsub, topic, message, dispatcher)
+  def handle_call({:forward_to_local, _, _, _} = message, _from, state) do
+    forward_to_local(state, message)
     {:reply, :ok, state}
   end
 
   @impl true
-  def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
+  def handle_call([{:forward_to_local, _, _, _} | _] = messages, _from, state) do
     FaultInjection.if_ok do
-      deliver_batch(messages, from, state)
+      Enum.each(messages, &forward_to_local(state, &1))
       {:reply, :ok, state}
     else
       {:reply, :error, state}
@@ -67,7 +73,7 @@ defmodule EchoPubSub.Worker do
   def handle_call({:register, node}, _from, state) do
     if registered?(state, node), do: broadcast_expired_message(state.pubsub, node)
 
-    :ets.insert(state.registrations, {node})
+    record_producer(state, node)
     {:reply, :ok, state}
   end
 
@@ -75,7 +81,7 @@ defmodule EchoPubSub.Worker do
   # missed: record it for a later producer restart, without a notice.
   @impl true
   def handle_call({:resume, node}, _from, state) do
-    :ets.insert(state.registrations, {node})
+    record_producer(state, node)
     {:reply, :ok, state}
   end
 
@@ -86,18 +92,22 @@ defmodule EchoPubSub.Worker do
 
   defp registered?(state, node), do: :ets.member(state.registrations, node)
 
-  defp deliver_batch(messages, from, state) do
-    Enum.each(messages, fn message -> handle_call(message, from, state) end)
+  defp record_producer(state, node), do: :ets.insert(state.registrations, {node})
+
+  defp forward_to_local(state, {:forward_to_local, topic, message, dispatcher}) do
+    Phoenix.PubSub.local_broadcast(state.pubsub, topic, message, dispatcher)
   end
 
   defp broadcast_expired_message(pubsub, node) do
-    # The registry holds one entry per subscriber, so a topic repeats once per
-    # subscriber; without uniq each subscriber would get the notice that many times.
-    topics = pubsub |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}]) |> Enum.uniq()
-
-    Enum.each(topics, fn topic ->
+    Enum.each(subscribed_topics(pubsub), fn topic ->
       Phoenix.PubSub.local_broadcast(pubsub, topic, {:cursor_expired, node})
     end)
+  end
+
+  # The registry holds one entry per subscriber, so a topic repeats once per
+  # subscriber; without uniq each subscriber would get the notice that many times.
+  defp subscribed_topics(pubsub) do
+    pubsub |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}]) |> Enum.uniq()
   end
 
   defp pg_join(group) do
