@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.2.0 - 2026-10-17
+### Fixed
+- A peer that hangs right after joining can no longer stall or crash the producer:
+  registration (`{:register, node}`) now runs in a task like deliveries, also at
+  startup, so a restart can't loop on one unresponsive node.
+- A node seen by a flush before its join notice no longer gets a false
+  `{:cursor_expired, node}` or a replay of the whole history; it joins the current
+  batch window once registered.
+- Each subscriber gets `{:cursor_expired, node}` once, not once per subscriber
+  sharing its topic.
+- Nodes that leave for good are forgotten once they fall more than `:buffer_size`
+  behind, so a scale-down no longer pins the buffer metric or fires the capacity
+  warning forever. A node whose worker restarts is registered again and keeps its
+  cursor.
+- A worker restart no longer sends its subscribers a false `{:cursor_expired, _}`,
+  neither from its own producer nor from a peer that kept its cursor. A producer
+  that still holds a node's cursor sends the new `{:resume, node}` instead of
+  `{:register, node}`.
+- A worker remembers which producers registered with it across its own restarts
+  (an ETS table owned by the adapter supervisor), so a node that was down for more
+  than a buffer is still told it expired.
+
+### Added
+- Options are validated at startup: an invalid `:pool_size`, `:buffer_size`,
+  `:call_timeout`, `:batch_interval`, `:capacity_warning_interval` or
+  `:capacity_warning_threshold` raises an `ArgumentError` naming the option,
+  instead of crashing later (e.g. `buffer_size: 0` on the first write).
+- Moduledoc section on loading state at startup: connect, subscribe, then load.
+
+### Changed
+- Mixed-version clusters: a v0.1.x worker rejects `{:resume, node}`, so delivery
+  from an upgraded node to it waits (messages stay buffered) until it is upgraded.
+- A node forgotten after a long absence gets `{:cursor_expired, node}` through its
+  registration, so `[:echo_pubsub, :buffer, :expired]` does not fire for it.
+- The worker no longer keeps the last batch in memory, and test-only calls
+  (`:get_last_batch`, `:registered?`) are gone.
+- Internals: the producer is split into focused modules (state, ring buffer,
+  registration, delivery, timers, remote calls, telemetry) and options are
+  resolved by `EchoPubSub.Options`. No behaviour change.
+  builds instead of being dead code.
+
 ## v0.1.7 - 2026-10-05
 ### Changed
 - The flush no longer waits for remote deliveries. Each node's batch is handed to
