@@ -92,8 +92,36 @@ defmodule EchoPubSub.Cluster do
       assert_wait_for(max(0, timeout - 10), fun)
   end
 
+  @doc "Stops the PubSub server and TestSubscriber on the calling node, newest first."
+  def stop_children do
+    for {id, _pid, _type, _modules} <- Supervisor.which_children(EchoPubSub.TestSupervisor) do
+      :ok = Supervisor.terminate_child(EchoPubSub.TestSupervisor, id)
+    end
+
+    :ok
+  end
+
+  @doc "Starts the children stopped by stop_children/0 again, oldest first."
+  def start_children do
+    for {id, _pid, _type, _modules} <-
+          Enum.reverse(Supervisor.which_children(EchoPubSub.TestSupervisor)) do
+      {:ok, _pid} = Supervisor.restart_child(EchoPubSub.TestSupervisor, id)
+    end
+
+    :ok
+  end
+
   def spawn_node(name, nodes, opts \\ []) do
-    {:ok, pid, node} = :peer.start_link(%{name: ~c"#{name}", connection: :standard_io})
+    # Async test modules boot peers at the same time, so names must never repeat.
+    name = "#{name}_#{System.unique_integer([:positive])}"
+    # Tests cut single links on purpose; without this, 'global' would cut more
+    # links to stop the cluster splitting into overlapping partitions.
+    {:ok, pid, node} =
+      :peer.start_link(%{
+        name: ~c"#{name}",
+        connection: :standard_io,
+        args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
+      })
 
     :peer.call(pid, :code, :add_paths, [:code.get_path()])
     connect_to_cluster(pid, nodes)
@@ -121,29 +149,31 @@ defmodule EchoPubSub.Cluster do
     end)
   end
 
-  # Dev/test build tooling that has no business running on a test peer node.
-  @skip_apps [:dialyxir, :credo, :ex_doc, :erlex]
+  # Only what a peer runs: the library itself, ExUnit for CaptureLog, and Mix for
+  # Mix.env. Starting every loaded app (hex, ssl, credo...) slows each boot.
+  @peer_apps [:mix, :ex_unit, :echo_pubsub]
 
   defp start_apps(pid, opts) do
-    :peer.call(pid, Application, :ensure_all_started, [:mix])
-    :peer.call(pid, Mix, :env, [Mix.env()])
-
-    for {app_name, _, _} <- Application.loaded_applications(), app_name not in @skip_apps do
-      :peer.call(pid, Application, :ensure_all_started, [app_name])
+    for app_name <- @peer_apps do
+      {:ok, _} = :peer.call(pid, Application, :ensure_all_started, [app_name])
     end
+
+    :peer.call(pid, Mix, :env, [Mix.env()])
 
     batch_interval = Keyword.get(opts, :batch_interval, 0)
     capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
     capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
     buffer_size = Keyword.get(opts, :buffer_size, 10)
     pool_size = Keyword.get(opts, :pool_size, 1)
+    call_timeout = Keyword.get(opts, :call_timeout, 5000)
 
     remote_run %{pid: pid},
       batch_interval: batch_interval,
       capacity_warning_threshold: capacity_warning_threshold,
       capacity_warning_interval: capacity_warning_interval,
       buffer_size: buffer_size,
-      pool_size: pool_size do
+      pool_size: pool_size,
+      call_timeout: call_timeout do
       parent = self()
 
       spawn(fn ->
@@ -154,6 +184,7 @@ defmodule EchoPubSub.Cluster do
            pool_size: pool_size,
            buffer_size: buffer_size,
            batch_interval: batch_interval,
+           call_timeout: call_timeout,
            capacity_warning_threshold: capacity_warning_threshold,
            capacity_warning_interval: capacity_warning_interval},
           {EchoPubSub.TestSubscriber, name: EchoPubSub.TestSubscriber}
