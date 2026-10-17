@@ -1,5 +1,26 @@
 defmodule EchoPubSub.Producer do
-  @moduledoc false
+  @moduledoc """
+  Sends this node's broadcasts to the workers on other nodes, one producer per
+  pool group.
+
+  Every broadcast is written to a ring buffer of the last `buffer_size`
+  messages. For each remote node the producer keeps a read cursor: the position
+  up to which that node has acknowledged. A flush sends each node the messages
+  from its cursor to the write cursor, and the cursor moves only when the node's
+  worker replies `:ok`, so a failed batch is sent again on the next flush.
+
+  Remote calls run in tasks, so a slow or hung node never blocks broadcasts.
+  A node is registered before its first batch:
+
+    * `{:register, node}` when the producer has no cursor for it (new node,
+      forgotten node, or this producer restarted), so a worker that knew this
+      producer reports `{:cursor_expired, node}`
+    * `{:resume, node}` when the cursor survived and only the worker restarted
+
+  A node more than `buffer_size` messages behind gets `{:expired, node}`
+  instead of messages it can no longer be sent. Local subscribers never go
+  through the producer: Phoenix delivers local broadcasts directly.
+  """
   use GenServer
   use TypedStruct
   require Logger

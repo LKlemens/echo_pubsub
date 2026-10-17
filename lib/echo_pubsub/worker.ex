@@ -1,5 +1,19 @@
 defmodule EchoPubSub.Worker do
-  @moduledoc false
+  @moduledoc """
+  Receives batches from the producers on other nodes and broadcasts them to
+  this node's subscribers, one worker per pool group.
+
+  The worker joins the group's `:pg` group, which is how producers find it.
+  It replies `:ok` to a batch only after broadcasting it locally; the producer
+  moves that node's read cursor only on that reply.
+
+  It also remembers which producer nodes have registered with it, in an ETS
+  table owned by the adapter supervisor so the record survives a worker
+  restart. A `{:register, node}` from a producer it already knows means that
+  producer lost this node's cursor, so the worker sends `{:cursor_expired, node}`
+  to every local topic. `{:resume, node}` only records the producer, and
+  `{:expired, node}` always sends the notice.
+  """
   use GenServer
 
   require EchoPubSub.FaultInjection, as: FaultInjection
