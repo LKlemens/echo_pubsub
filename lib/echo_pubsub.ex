@@ -19,7 +19,7 @@ defmodule EchoPubSub do
     * `:buffer_size` - The amount of messages to maintain in memory
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
     * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
-    * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning (default: 0.4)
+    * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning; above 1.0 never warns (default: 0.4)
     * `:capacity_warning_interval` - Minimum seconds between warnings (default: 60)
 
   ## Configuration
@@ -145,6 +145,25 @@ defmodule EchoPubSub do
       Keyword.get(opts, :capacity_warning_interval) ||
         Keyword.get(config, :capacity_warning_interval, 60)
 
+    validate!(:pool_size, pool_size, &pos_integer?/1, "a positive integer")
+    validate!(:buffer_size, buffer_size, &pos_integer?/1, "a positive integer")
+    validate!(:call_timeout, call_timeout, &pos_integer?/1, "a positive integer")
+    validate!(:batch_interval, batch_interval, &non_neg_integer?/1, "a non-negative integer")
+
+    validate!(
+      :capacity_warning_interval,
+      capacity_warning_interval,
+      &non_neg_integer?/1,
+      "a non-negative integer"
+    )
+
+    validate!(
+      :capacity_warning_threshold,
+      capacity_warning_threshold,
+      &(is_number(&1) and &1 >= 0),
+      "a non-negative number"
+    )
+
     [_ | groups] =
       for number <- 1..pool_size do
         :"#{adapter_name}#{number}"
@@ -181,4 +200,21 @@ defmodule EchoPubSub do
 
     Supervisor.init(children, strategy: :one_for_one)
   end
+
+  # A bad value would otherwise crash far from its cause, e.g. buffer_size: 0 in
+  # rem/2 on the first write.
+  @spec validate!(atom(), term(), (term() -> boolean()), String.t()) :: :ok
+  defp validate!(option, value, valid?, expected) do
+    if valid?.(value) do
+      :ok
+    else
+      raise ArgumentError, "expected #{inspect(option)} to be #{expected}, got: #{inspect(value)}"
+    end
+  end
+
+  @spec pos_integer?(term()) :: boolean()
+  defp pos_integer?(value), do: is_integer(value) and value > 0
+
+  @spec non_neg_integer?(term()) :: boolean()
+  defp non_neg_integer?(value), do: is_integer(value) and value >= 0
 end
