@@ -181,50 +181,44 @@ defmodule EchoPubSub.Cluster do
 
     :peer.call(pid, Mix, :env, [Mix.env()])
 
-    batch_interval = Keyword.get(opts, :batch_interval, 0)
-    capacity_warning_threshold = Keyword.get(opts, :capacity_warning_threshold, 0.4)
-    capacity_warning_interval = Keyword.get(opts, :capacity_warning_interval, 60)
-    buffer_size = Keyword.get(opts, :buffer_size, 10)
-    pool_size = Keyword.get(opts, :pool_size, 1)
-    call_timeout = Keyword.get(opts, :call_timeout, 5000)
+    # A cold peer loads every module from disk here, which can outlast
+    # remote_run's 1 s timeout on a busy CI runner.
+    {:ok, _supervisor} = :peer.call(pid, __MODULE__, :start_supervisor, [opts], 10_000)
+  end
 
-    remote_run %{pid: pid},
-      batch_interval: batch_interval,
-      capacity_warning_threshold: capacity_warning_threshold,
-      capacity_warning_interval: capacity_warning_interval,
-      buffer_size: buffer_size,
-      pool_size: pool_size,
-      call_timeout: call_timeout do
-      parent = self()
+  @doc """
+  Starts PubSubTest and the TestSubscriber under `EchoPubSub.TestSupervisor` on
+  the calling node, owned by a process that never exits. Runs on the peer.
+  """
+  def start_supervisor(opts) do
+    pubsub_opts = [
+      name: PubSubTest,
+      adapter: EchoPubSub,
+      pool_size: Keyword.get(opts, :pool_size, 1),
+      buffer_size: Keyword.get(opts, :buffer_size, 10),
+      batch_interval: Keyword.get(opts, :batch_interval, 0),
+      call_timeout: Keyword.get(opts, :call_timeout, 5000),
+      capacity_warning_threshold: Keyword.get(opts, :capacity_warning_threshold, 0.4),
+      capacity_warning_interval: Keyword.get(opts, :capacity_warning_interval, 60)
+    ]
 
-      spawn(fn ->
-        children = [
-          {Phoenix.PubSub,
-           name: PubSubTest,
-           adapter: EchoPubSub,
-           pool_size: pool_size,
-           buffer_size: buffer_size,
-           batch_interval: batch_interval,
-           call_timeout: call_timeout,
-           capacity_warning_threshold: capacity_warning_threshold,
-           capacity_warning_interval: capacity_warning_interval},
-          {EchoPubSub.TestSubscriber, name: EchoPubSub.TestSubscriber}
-        ]
+    children = [
+      {Phoenix.PubSub, pubsub_opts},
+      {EchoPubSub.TestSubscriber, name: EchoPubSub.TestSubscriber}
+    ]
 
-        {:ok, supervisor_pid} =
-          Supervisor.start_link(children,
-            strategy: :one_for_one,
-            name: EchoPubSub.TestSupervisor
-          )
+    parent = self()
 
-        send(parent, {:started, supervisor_pid})
+    spawn(fn ->
+      {:ok, supervisor_pid} =
+        Supervisor.start_link(children, strategy: :one_for_one, name: EchoPubSub.TestSupervisor)
 
-        Process.sleep(:infinity)
-      end)
+      send(parent, {:started, supervisor_pid})
+      Process.sleep(:infinity)
+    end)
 
-      receive do
-        {:started, pid} -> {:ok, pid}
-      end
+    receive do
+      {:started, pid} -> {:ok, pid}
     end
   end
 end
