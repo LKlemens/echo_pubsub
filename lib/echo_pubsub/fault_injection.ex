@@ -35,13 +35,15 @@ defmodule EchoPubSub.FaultInjection do
         :error
       end
   """
-  defmacro if_ok(do: ok_block, else: fault_block) do
-    if @enabled do
+  # Two definitions, picked at compile time: a runtime `if @enabled` inside one
+  # macro would leave Dialyzer an unreachable branch in whichever build it checks.
+  if @enabled do
+    defmacro if_ok(do: ok_block, else: fault_block) do
       quote do
         if EchoPubSub.FaultInjection.ok?(), do: unquote(ok_block), else: unquote(fault_block)
       end
-    else
-      ok_block
     end
+  else
+    defmacro if_ok(do: ok_block, else: _fault_block), do: ok_block
   end
 end

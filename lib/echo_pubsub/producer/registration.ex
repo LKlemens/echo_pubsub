@@ -5,8 +5,8 @@ defmodule EchoPubSub.Producer.Registration do
   Runs in a task; `finish/5` folds the reply into the producer state.
   """
 
-  alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Remote
+  alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Timers
 
   @doc "Whether a registration task for `node` is running (not a failed one waiting to retry)."
