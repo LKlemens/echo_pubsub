@@ -4,6 +4,151 @@ defmodule EchoPubSub.RegistrationTest do
   setup_all :start_shared_peers
   setup :reset_peers
 
+  test "no message is lost while a worker is down", %{peer1: peer1, peer2: peer2} do
+    # 1. A subscriber on peer1; both producers have registered the other peer.
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer1, peer2)
+    assert_registered(peer2, peer1)
+
+    # 2. peer1's worker stops and stays down (a kill would restart it at once).
+    remote_run peer1 do
+      :ok = Supervisor.terminate_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+    end
+
+    # 3. A local broadcast never goes through the worker: peer1 gets it at once.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :local_while_down)
+    assert_peer_receive peer1, :local_while_down
+    assert_peer_receive peer2, :local_while_down
+
+    # 4. peer2's message waits in peer2's buffer while peer1 has no worker.
+    remote_run peer2, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :remote_while_down)
+    refute_peer_receive peer1, :remote_while_down
+
+    # 5. The worker is back: peer2 resumes it and replays the message, no notice.
+    remote_run peer1 do
+      {:ok, _pid} =
+        Supervisor.restart_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+    end
+
+    messages = receive_until(peer1, :remote_while_down)
+    refute Enum.any?(messages, &match?({:cursor_expired, _}, &1))
+  end
+
+  test "a batch lost in a crashing worker is redelivered to its replacement", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. A subscriber on peer1; peer2 has registered peer1's worker.
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer1, peer2)
+
+    # 2. peer1's worker stops handling messages, so the next batch waits in its mailbox.
+    remote_run peer1, do: :sys.suspend(PubSubTest.Adapter.Worker)
+
+    # 3. peer2's batch reaches that mailbox and its delivery stays in flight.
+    remote_run peer2, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :in_flight)
+
+    assert_wait_for(fn ->
+      in_flight =
+        remote_run peer2 do
+          :sys.get_state(PubSubTest.Adapter.Producer).in_flight
+        end
+
+      assert Map.has_key?(in_flight, peer1.node)
+    end)
+
+    # 4. The worker crashes with the batch unread; the supervisor starts a new one.
+    remote_run peer1, do: Process.exit(Process.whereis(PubSubTest.Adapter.Worker), :kill)
+
+    # 5. peer2 kept peer1's cursor, so it resumes the new worker and re-sends the
+    #    batch, with no notice before it.
+    messages = receive_until(peer1, :in_flight)
+    refute Enum.any?(messages, &match?({:cursor_expired, _}, &1))
+  end
+
+  test "a worker down for more than a buffer gets cursor_expired", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. A subscriber on peer1; peer2 has registered peer1's worker.
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer1, peer2)
+
+    # 2. peer1's worker stops and stays down; peer1 stays connected.
+    remote_run peer1 do
+      :ok = Supervisor.terminate_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+    end
+
+    # 3. buffer_size is 10; 12 messages overwrite some peer1 never got, so
+    #    peer2's producer forgets peer1.
+    remote_run peer2 do
+      for i <- 1..12, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", i)
+    end
+
+    assert_wait_for(fn ->
+      read_cursors =
+        remote_run peer2 do
+          :sys.get_state(PubSubTest.Adapter.Producer).read_cursors
+        end
+
+      refute Map.has_key?(read_cursors, peer1.node)
+    end)
+
+    # 4. The worker is back; it still remembers peer2, so it reports the gap.
+    remote_run peer1 do
+      {:ok, _pid} =
+        Supervisor.restart_child(PubSubTest.Adapter.Supervisor, PubSubTest.Adapter.Worker)
+    end
+
+    node = peer2.node
+    assert_peer_receive peer1, {:cursor_expired, ^node}
+
+    # 5. New messages from peer2 arrive again.
+    remote_run peer2, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_return)
+    assert_peer_receive peer1, :after_return
+  end
+
+  test "a restarted worker gets no cursor_expired from its own producer or a peer", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. A subscriber on peer1; peer2 has registered peer1's worker.
+    remote_run peer1, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer1, peer2)
+
+    # 2. peer1's worker restarts; wait until peer2's producer has the new one.
+    old_worker =
+      remote_run peer1 do
+        pid = Process.whereis(PubSubTest.Adapter.Worker)
+        Process.exit(pid, :kill)
+        pid
+      end
+
+    assert_wait_for(5_000, fn ->
+      new_worker =
+        remote_run peer1, old_worker: old_worker do
+          pid = Process.whereis(PubSubTest.Adapter.Worker)
+          if pid != old_worker, do: pid
+        end
+
+      workers =
+        remote_run peer2 do
+          :sys.get_state(PubSubTest.Adapter.Producer).workers
+        end
+
+      assert new_worker && Map.get(workers, peer1.node) == new_worker
+    end)
+
+    # 3. Neither producer lost anything, so no notice reaches peer1.
+    refute_peer_receive peer1, {:cursor_expired, _}
+
+    # 4. Messages from both producers still arrive.
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :from_peer1)
+    remote_run peer2, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :from_peer2)
+    assert_peer_receive peer1, :from_peer1
+    assert_peer_receive peer1, :from_peer2
+  end
+
   test "registers a known node again when its worker restarts", %{peer1: peer1, peer2: peer2} do
     # 1. peer2's worker, already registered by peer1, restarts with a new pid.
     assert_registered(peer2, peer1)
@@ -155,5 +300,24 @@ defmodule EchoPubSub.RegistrationTest do
 
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_return)
     assert_peer_receive peer2, :after_return
+  end
+
+  # Every message the peer's subscriber gets up to and including `last`, in order;
+  # unlike assert_peer_receive, it keeps the ones before `last` for inspection.
+  defp receive_until(peer, last, timeout \\ 5_000, acc \\ []) do
+    case remote_run(peer, do: EchoPubSub.TestSubscriber.get_message()) do
+      ^last ->
+        Enum.reverse([last | acc])
+
+      nil when timeout > 0 ->
+        Process.sleep(10)
+        receive_until(peer, last, timeout - 10, acc)
+
+      nil ->
+        flunk("never received #{inspect(last)}, got: #{inspect(Enum.reverse(acc))}")
+
+      message ->
+        receive_until(peer, last, timeout, [message | acc])
+    end
   end
 end

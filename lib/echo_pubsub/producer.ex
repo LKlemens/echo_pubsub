@@ -94,7 +94,7 @@ defmodule EchoPubSub.Producer do
     }
 
     # Registration runs in tasks, so a hung peer cannot block startup.
-    {:ok, Enum.reduce(pids, state, &dispatch_node(&1, node(&1), &2))}
+    {:ok, Enum.reduce(pids, state, &process_joined/2)}
   end
 
   @impl GenServer
@@ -215,13 +215,22 @@ defmodule EchoPubSub.Producer do
     start = registration_start(state, node)
     call_timeout = state.call_timeout
     supervisor = Module.concat(state.group, TaskSupervisor)
+    message = registration_message(state, node)
 
     task =
       Task.Supervisor.async_nolink(supervisor, fn ->
-        safe_call(pid, {:register, node()}, call_timeout, nil)
+        safe_call(pid, message, call_timeout, nil)
       end)
 
     %{state | registering: Map.put(state.registering, node, {task.ref, start, pid})}
+  end
+
+  # A producer that still holds the node's cursor (its worker restarted) has lost
+  # nothing, so it resumes: the worker records it without a cursor_expired.
+  defp registration_message(state, node) do
+    if Map.has_key?(state.read_cursors, node),
+      do: {:resume, node()},
+      else: {:register, node()}
   end
 
   # On the first attempt the node joins the current batch window: it starts at
@@ -373,7 +382,10 @@ defmodule EchoPubSub.Producer do
   end
 
   # Join and flush share dispatch_node/3 so the register / deliver decision lives
-  # in one place.
+  # in one place. The local worker is skipped, as in flush_all: Phoenix already
+  # delivers local broadcasts, so registering it would only send its subscribers a
+  # false cursor_expired.
+  defp process_joined(pid, state) when node(pid) == node(), do: state
   defp process_joined(pid, state), do: dispatch_node(pid, node(pid), state)
 
   defp emit_expired(group, node, missed_messages) do

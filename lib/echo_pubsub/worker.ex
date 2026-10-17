@@ -60,6 +60,14 @@ defmodule EchoPubSub.Worker do
     {:reply, :ok, state}
   end
 
+  # The producer kept this node's cursor across a worker restart, so nothing was
+  # missed: record it for a later producer restart, without a notice.
+  @impl true
+  def handle_call({:resume, node}, _from, state) do
+    :ets.insert(state.registrations, {node})
+    {:reply, :ok, state}
+  end
+
   @impl true
   def handle_call(_, _from, state) do
     {:reply, {:error, :bad_message}, state}

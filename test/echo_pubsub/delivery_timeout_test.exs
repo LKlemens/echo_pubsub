@@ -13,6 +13,9 @@ defmodule EchoPubSub.DeliveryTimeoutTest do
 
     remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
 
+    # The delivery call must be the one that hangs, not peer2's registration.
+    assert_registered(peer2, peer1)
+
     # Hung but connected peer: calls queue up instead of failing fast.
     remote_run peer2, do: :sys.suspend(PubSubTest.Adapter.Worker)
 
