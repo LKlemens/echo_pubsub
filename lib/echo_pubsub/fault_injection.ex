@@ -22,4 +22,26 @@ defmodule EchoPubSub.FaultInjection do
   else
     def ok?, do: true
   end
+
+  @doc """
+  Runs the `do` block, or the `else` block while a fault is injected.
+
+  When fault injection is off, only the `do` block is compiled, so production code
+  has no fault branch at all.
+
+      FaultInjection.if_ok do
+        deliver()
+      else
+        :error
+      end
+  """
+  defmacro if_ok(do: ok_block, else: fault_block) do
+    if @enabled do
+      quote do
+        if EchoPubSub.FaultInjection.ok?(), do: unquote(ok_block), else: unquote(fault_block)
+      end
+    else
+      ok_block
+    end
+  end
 end

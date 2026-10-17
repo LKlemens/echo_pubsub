@@ -2,7 +2,7 @@ defmodule EchoPubSub.Worker do
   @moduledoc false
   use GenServer
 
-  alias EchoPubSub.FaultInjection
+  require EchoPubSub.FaultInjection, as: FaultInjection
 
   def start_link({name, group}) do
     GenServer.start_link(__MODULE__, {name, group}, name: Module.concat(group, Worker))
@@ -31,7 +31,7 @@ defmodule EchoPubSub.Worker do
 
   @impl true
   def handle_call([{:forward_to_local, _, _, _} | _] = messages, from, state) do
-    if FaultInjection.ok?() do
+    FaultInjection.if_ok do
       deliver_batch(messages, from, state)
       {:reply, :ok, state}
     else
@@ -41,7 +41,7 @@ defmodule EchoPubSub.Worker do
 
   @impl true
   def handle_call({:expired, node}, _from, state) do
-    if FaultInjection.ok?() do
+    FaultInjection.if_ok do
       broadcast_expired_message(state.pubsub, node)
       # A producer that forgot this node reaches it here, not through :register,
       # so record it to still report a later restart of that producer.

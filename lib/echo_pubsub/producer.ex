@@ -4,7 +4,7 @@ defmodule EchoPubSub.Producer do
   use TypedStruct
   require Logger
 
-  alias EchoPubSub.FaultInjection
+  require EchoPubSub.FaultInjection, as: FaultInjection
 
   @type cursor :: non_neg_integer()
   @type group :: atom()
@@ -338,8 +338,6 @@ defmodule EchoPubSub.Producer do
     end
   end
 
-  defp deliver_batch(_pid, :caught_up, _call_timeout), do: :ok
-
   defp deliver_batch(pid, {:expired, missed}, call_timeout) do
     case safe_call(pid, {:expired, node()}, call_timeout, nil) do
       :ok -> {:expired, missed}
@@ -427,7 +425,7 @@ defmodule EchoPubSub.Producer do
   # Under an injected fault, outgoing sends short-circuit to :error so the batch
   # stays buffered and replays on recovery - the send-side half of the partition.
   defp safe_call(pid, messages, call_timeout, _state) do
-    if FaultInjection.ok?() do
+    FaultInjection.if_ok do
       do_safe_call(pid, messages, call_timeout)
     else
       :error
