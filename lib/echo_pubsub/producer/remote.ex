@@ -7,11 +7,11 @@ defmodule EchoPubSub.Producer.Remote do
 
   require EchoPubSub.FaultInjection, as: FaultInjection
 
-  @type registration :: {:register | :resume, node()}
+  @type registration :: {:register, node(), boolean()} | {:resume, node()}
   @type batch :: {:expired, pos_integer()} | {:messages, [term()]}
   @type verdict :: :ok | {:expired, pos_integer()} | :expired_failed | {:failed, pos_integer()}
 
-  @doc "Sends `{:register, node}` or `{:resume, node}` to the worker."
+  @doc "Sends `{:register, node, missed_writes?}` or `{:resume, node}` to the worker."
   @spec register(pid(), registration(), timeout()) :: :ok | :error
   def register(pid, message, timeout), do: call(pid, message, timeout)
 

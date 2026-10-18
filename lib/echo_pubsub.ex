@@ -51,10 +51,14 @@ defmodule EchoPubSub do
     2. subscribe to the topics
     3. load state from the source of truth (e.g. the database)
 
-  A peer only sends this node the messages it flushes after registering the node,
-  which happens shortly after the node joins. A change a peer flushes before that
-  is never delivered here, so it reaches this node only if the state is loaded
-  after the registration.
+  Each peer registers this node on its own, shortly after the node joins, and
+  only sends it the messages it flushes after that. A peer that had already
+  flushed writes when it registers this node sends `{:cursor_expired, peer}`, so
+  reload state on that message too: the load may have missed those writes.
+
+  A notice that arrives before step 2 reaches no subscriber, which is harmless
+  since step 3 follows. A node that subscribed early can get one notice per peer
+  right after startup, so it is worth collapsing reloads that arrive together.
 
   A message broadcast before the load can still be delivered after it (batching
   delays delivery, failed sends are retried), so its change may already be in the

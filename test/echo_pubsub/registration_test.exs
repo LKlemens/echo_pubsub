@@ -260,6 +260,70 @@ defmodule EchoPubSub.RegistrationTest do
     assert_peer_receive peer2, :after_restart
   end
 
+  test "a node registered after skipped writes gets cursor_expired, even from a stranger", %{
+    peer1: peer1,
+    peer2: peer2
+  } do
+    # 1. peer2 drops out of peer1's :pg view; a new producer that still saw it
+    #    would call it and reconnect the nodes.
+    remote_run peer2, node: peer1.node do
+      Node.disconnect(node)
+    end
+
+    assert_wait_for(fn ->
+      members = remote_run(peer1, do: :pg.get_members(Phoenix.PubSub, PubSubTest.Adapter))
+      refute Enum.any?(members, &(node(&1) == peer2.node))
+    end)
+
+    # 2. peer1's producer restarts and broadcasts while peer2 is away, so the
+    #    flush moves its start cursor past :early.
+    old_producer = remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer))
+    remote_run peer1, do: GenServer.stop(PubSubTest.Adapter.Producer, :normal)
+
+    assert_wait_for(fn ->
+      new_producer = remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer))
+      assert new_producer && new_producer != old_producer
+    end)
+
+    remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :early)
+
+    assert_wait_for(fn ->
+      read_cursors =
+        remote_run peer1 do
+          :sys.get_state(PubSubTest.Adapter.Producer).read_cursors
+        end
+
+      assert Map.get(read_cursors, peer1.node, 0) > 0
+    end)
+
+    # 3. peer2 forgets peer1, as if peer2 restarted after peer1's last handshake.
+    remote_run peer2 do
+      :ets.delete_all_objects(EchoPubSub.Worker.registrations_table(PubSubTest.Adapter))
+    end
+
+    # 4. peer2 returns: :early is skipped, so it must be told.
+    remote_run peer2, node: peer1.node do
+      Node.connect(node)
+    end
+
+    node = peer1.node
+    assert_peer_receive peer2, {:cursor_expired, ^node}
+    refute_peer_receive peer2, :early
+  end
+
+  test "a register flagged with missed writes notifies even for an unknown producer", %{
+    peer2: peer2
+  } do
+    # peer2's subscriber is up; neither producer node below ever registered.
+    remote_run peer2 do
+      :ok = GenServer.call(PubSubTest.Adapter.Worker, {:register, :quiet@nowhere, false})
+      :ok = GenServer.call(PubSubTest.Adapter.Worker, {:register, :missed@nowhere, true})
+    end
+
+    assert_peer_receive peer2, {:cursor_expired, :missed@nowhere}
+    refute_peer_receive peer2, {:cursor_expired, _}
+  end
+
   test "forgets a departed node once it falls off the buffer", %{peer1: peer1, peer2: peer2} do
     # 1. peer2 leaves peer1's :pg view.
     remote_run peer2, node: peer1.node do

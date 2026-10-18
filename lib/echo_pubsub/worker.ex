@@ -9,10 +9,11 @@ defmodule EchoPubSub.Worker do
 
   It also remembers which producer nodes have registered with it, in an ETS
   table owned by the adapter supervisor so the record survives a worker
-  restart. A `{:register, node}` from a producer it already knows means that
-  producer lost this node's cursor, so the worker sends `{:cursor_expired, node}`
-  to every local topic. `{:resume, node}` only records the producer, and
-  `{:expired, node}` always sends the notice.
+  restart. `{:register, node, missed_writes?}` sends `{:cursor_expired, node}` to
+  every local topic when the producer had already flushed writes this node will
+  not get, or when the worker already knows it (that producer lost this node's
+  cursor). `{:resume, node}` only records the producer, and `{:expired, node}`
+  always sends the notice.
   """
   use GenServer
 
@@ -70,12 +71,18 @@ defmodule EchoPubSub.Worker do
   end
 
   @impl true
-  def handle_call({:register, node}, _from, state) do
-    if registered?(state, node), do: broadcast_expired_message(state.pubsub, node)
+  def handle_call({:register, node, missed_writes?}, _from, state) do
+    if missed_writes? or registered?(state, node),
+      do: broadcast_expired_message(state.pubsub, node)
 
     record_producer(state, node)
     {:reply, :ok, state}
   end
+
+  # Sent by producers older than the missed-writes flag.
+  @impl true
+  def handle_call({:register, node}, from, state),
+    do: handle_call({:register, node, false}, from, state)
 
   # The producer kept this node's cursor across a worker restart, so nothing was
   # missed: record it for a later producer restart, without a notice.
