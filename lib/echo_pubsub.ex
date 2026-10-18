@@ -19,6 +19,7 @@ defmodule EchoPubSub do
     * `:buffer_size` - The amount of messages to maintain in memory
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
     * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
+    * `:retry_interval` - The interval in milliseconds before retrying after a failed call (default: 200)
     * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning; above 1.0 never warns (default: 0.4)
     * `:capacity_warning_interval` - Minimum seconds between warnings (default: 60)
 

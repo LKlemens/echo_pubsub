@@ -24,15 +24,15 @@ defmodule EchoPubSub.DeliveryTimeoutTest do
 
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg)
 
-    # Stays hung across several 100ms timeouts and 200ms retries; each retry
+    # Stays hung across several 100ms timeouts and 50ms retries; each retry
     # queues only a ping behind the first batch.
-    Process.sleep(1_000)
+    Process.sleep(300)
     remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
 
     # The queued batch, then the one resent after a ping is answered.
     assert_peer_receive peer2, :msg
     assert_peer_receive peer2, :msg
-    refute_peer_receive(peer2, :msg, 1_000)
+    refute_peer_receive(peer2, :msg, 300)
   end
 
   describe "probe" do

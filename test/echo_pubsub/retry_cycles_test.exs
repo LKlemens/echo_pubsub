@@ -11,8 +11,8 @@ defmodule EchoPubSub.RetryCyclesTest do
     # Send a message
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :persistent_retry_msg)
 
-    # Wait for multiple retry cycles (200ms each), still failing
-    Process.sleep(500)
+    # Wait for multiple retry cycles (50ms each), still failing
+    Process.sleep(150)
     refute_peer_receive peer2, :persistent_retry_msg
 
     # Allow messages again
@@ -40,8 +40,8 @@ defmodule EchoPubSub.RetryCyclesTest do
     assert_peer_receive peer2, :iso2
     assert_peer_receive peer2, :iso3
 
-    # Several 200ms retry cycles pass with peer3 still rejecting.
-    Process.sleep(500)
+    # Several 50ms retry cycles pass with peer3 still rejecting.
+    Process.sleep(150)
     refute_peer_receive peer3, :iso1
 
     remote_run peer3, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)

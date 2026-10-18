@@ -42,6 +42,7 @@ defmodule EchoPubSub.Producer do
           | {:buffer_size, pos_integer()}
           | {:batch_interval, non_neg_integer()}
           | {:call_timeout, timeout()}
+          | {:retry_interval, pos_integer()}
           | {:capacity_warning_threshold, number()}
           | {:capacity_warning_interval, non_neg_integer()}
 

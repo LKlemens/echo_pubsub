@@ -25,6 +25,7 @@ defmodule EchoPubSub.Producer.State do
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
     * `call_timeout` - timeout in milliseconds for synchronous calls to remote nodes
+    * `retry_interval` - milliseconds to wait before flushing again after a failure
     * `capacity_warning_threshold` - buffer fill ratio that triggers a capacity warning
     * `capacity_warning_interval` - minimum seconds between capacity warnings
     * `flush_timer` - reference of the pending flush timer, or `nil` when none is scheduled
@@ -41,6 +42,7 @@ defmodule EchoPubSub.Producer.State do
     field(:buffer, RingBuffer.t())
     field(:batch_interval, timeout())
     field(:call_timeout, timeout())
+    field(:retry_interval, pos_integer())
     field(:capacity_warning_threshold, number())
     field(:capacity_warning_interval, non_neg_integer())
     field(:flush_timer, reference() | nil, enforce: false)
@@ -55,6 +57,7 @@ defmodule EchoPubSub.Producer.State do
       buffer: RingBuffer.new(Keyword.fetch!(opts, :buffer_size)),
       batch_interval: Keyword.fetch!(opts, :batch_interval),
       call_timeout: Keyword.fetch!(opts, :call_timeout),
+      retry_interval: Keyword.fetch!(opts, :retry_interval),
       capacity_warning_threshold: Keyword.fetch!(opts, :capacity_warning_threshold),
       capacity_warning_interval: Keyword.fetch!(opts, :capacity_warning_interval)
     }

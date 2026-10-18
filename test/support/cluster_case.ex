@@ -92,4 +92,28 @@ defmodule EchoPubSub.ClusterCase do
       ExUnit.Assertions.assert(Map.has_key?(read_cursors, peer.node))
     end)
   end
+
+  @doc """
+  Every message `peer`'s subscriber gets up to and including `last`, in order;
+  unlike assert_peer_receive, it keeps the ones before `last` for inspection.
+  """
+  @spec receive_until(map(), term(), integer(), [term()]) :: [term()]
+  def receive_until(peer, last, timeout \\ 5_000, acc \\ []) do
+    case remote_run(peer, do: EchoPubSub.TestSubscriber.get_message()) do
+      ^last ->
+        Enum.reverse([last | acc])
+
+      nil when timeout > 0 ->
+        Process.sleep(10)
+        receive_until(peer, last, timeout - 10, acc)
+
+      nil ->
+        ExUnit.Assertions.flunk(
+          "never received #{inspect(last)}, got: #{inspect(Enum.reverse(acc))}"
+        )
+
+      message ->
+        receive_until(peer, last, timeout, [message | acc])
+    end
+  end
 end
