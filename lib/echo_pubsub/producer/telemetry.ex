@@ -52,8 +52,6 @@ defmodule EchoPubSub.Producer.Telemetry do
           non_neg_integer(),
           integer() | nil
         ) :: integer() | nil
-  def maybe_warn_capacity(_group, _buffer_size, 0, _threshold, _interval, last_at), do: last_at
-
   def maybe_warn_capacity(group, buffer_size, buffer_capacity, threshold, interval, last_at) do
     now = System.monotonic_time(:second)
     ratio = buffer_size / buffer_capacity

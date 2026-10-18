@@ -68,6 +68,23 @@ defmodule EchoPubSub.TaskDownTest do
     assert_peer_receive peer2, :after_retry
   end
 
+  test "the producer ignores results and DOWNs of unknown tasks and stray messages", %{
+    peer1: peer1
+  } do
+    pid = remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer))
+    state = producer_state(peer1)
+
+    remote_run peer1, pid: pid do
+      send(pid, {make_ref(), :ok})
+      send(pid, {:DOWN, make_ref(), :process, self(), :normal})
+      send(pid, :garbage)
+    end
+
+    # get_state is answered after the three messages, so they have been handled.
+    assert producer_state(peer1) == state
+    assert remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer)) == pid
+  end
+
   defp producer_state(peer) do
     remote_run(peer, do: :sys.get_state(PubSubTest.Adapter.Producer))
   end

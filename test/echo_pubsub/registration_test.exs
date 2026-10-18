@@ -440,6 +440,29 @@ defmodule EchoPubSub.RegistrationTest do
 
   # Every message the peer's subscriber gets up to and including `last`, in order;
   # unlike assert_peer_receive, it keeps the ones before `last` for inspection.
+  test "a worker still accepts {:register, node} from an older producer", %{peer2: peer2} do
+    # 1. The first registration from an unknown producer is only recorded.
+    assert :ok =
+             remote_run(peer2,
+               do: GenServer.call(PubSubTest.Adapter.Worker, {:register, :old@host})
+             )
+
+    refute_peer_receive peer2, {:cursor_expired, :old@host}
+
+    # 2. Registering again means that producer lost peer2's cursor: notice sent.
+    assert :ok =
+             remote_run(peer2,
+               do: GenServer.call(PubSubTest.Adapter.Worker, {:register, :old@host})
+             )
+
+    assert_peer_receive peer2, {:cursor_expired, :old@host}
+  end
+
+  test "a worker answers an unknown call with {:error, :bad_message}", %{peer2: peer2} do
+    assert {:error, :bad_message} =
+             remote_run(peer2, do: GenServer.call(PubSubTest.Adapter.Worker, :nonsense))
+  end
+
   defp receive_until(peer, last, timeout \\ 5_000, acc \\ []) do
     case remote_run(peer, do: EchoPubSub.TestSubscriber.get_message()) do
       ^last ->

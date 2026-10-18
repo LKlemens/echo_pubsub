@@ -94,25 +94,40 @@ defmodule EchoPubSub.ExpiryTest do
        %{peer1: peer1, peer2: peer2} do
     node = peer1.node
 
-    # Reject everything on peer2 — batches AND the expired notice itself.
-    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+    # 1. peer1's producer stops handling messages while 12 writes queue up, so its
+    #    first flush finds peer2 more than a buffer (10) behind without any failed
+    #    call before it: the notice goes out to a node that is not suspect.
+    remote_run peer1, do: :sys.suspend(PubSubTest.Adapter.Producer)
 
-    # buffer_size is 10; 12 messages push peer2's pinned cursor off the ring buffer,
-    # so the flush path starts trying to deliver {:cursor_expired, node} and fails.
     remote_run peer1 do
       for i <- 1..12 do
-        Phoenix.PubSub.broadcast!(PubSubTest, "topic", {:overflow, i})
+        spawn(fn -> Phoenix.PubSub.broadcast!(PubSubTest, "topic", {:overflow, i}) end)
       end
     end
 
-    # The failed notice must not be dropped: nothing arrives while faults are on...
+    assert_wait_for(fn ->
+      queued =
+        remote_run peer1 do
+          pid = Process.whereis(PubSubTest.Adapter.Producer)
+          {:message_queue_len, length} = Process.info(pid, :message_queue_len)
+          length
+        end
+
+      assert queued >= 12
+    end)
+
+    # 2. peer2 rejects every call, the expired notice included.
+    remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :error)
+    remote_run peer1, do: :sys.resume(PubSubTest.Adapter.Producer)
+
+    # 3. The failed notice is not dropped: nothing arrives while faults are on...
     refute_peer_receive peer2, {:cursor_expired, ^node}
 
     # ...and once the worker accepts calls again, the retried notice lands.
     remote_run peer2, do: Application.put_env(:echo_pubsub, :fault_injection, :ok)
     assert_peer_receive peer2, {:cursor_expired, ^node}
 
-    # The producer survived the failing calls and resumed normal delivery.
+    # 4. The producer survived the failing calls and resumed normal delivery.
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_recovery)
     assert_peer_receive peer2, :after_recovery
   end

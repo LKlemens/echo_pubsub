@@ -14,6 +14,10 @@ defmodule EchoPubSub.DeliveryTest do
     assert_peer_receive peer3, :message
   end
 
+  test "node_name is the node the adapter runs on", %{peer1: peer1} do
+    assert remote_run(peer1, do: Phoenix.PubSub.node_name(PubSubTest)) == peer1.node
+  end
+
   test "direct_broadcast targets a specific node", %{peer1: peer1, peer2: peer2} do
     peer3 = spawn_node("node3", [peer1])
     remote_run peer3, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
