@@ -1,6 +1,7 @@
 # EchoPubSub
 
 [![CI](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml/badge.svg)](https://github.com/LKlemens/echo_pubsub/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/LKlemens/echo_pubsub/badge.svg?branch=main)](https://coveralls.io/github/LKlemens/echo_pubsub?branch=main)
 [![hex.pm version](https://img.shields.io/hexpm/v/echo_pubsub.svg)](https://hex.pm/packages/echo_pubsub)
 [![hex.pm license](https://img.shields.io/hexpm/l/echo_pubsub.svg)](https://github.com/LKlemens/echo_pubsub/blob/main/LICENSE)
 
@@ -82,7 +83,7 @@ for worked examples.
 ```elixir
 def deps do
   [
-    {:echo_pubsub, "~> 0.1.0"}
+    {:echo_pubsub, "~> 0.2.2"}
   ]
 end
 ```
@@ -124,6 +125,7 @@ With `:pool_size > 1` there are independent producers and order/at-least-once is
 
 Subscribing processes should handle the message `{:cursor_expired, node_name}` which indicates that your client
 has been unreachable long enough that your position in the broadcaster's buffer has been overwritten. At this point it is the subscribing process's job to return to a valid state i.e. reloading state from source like database or another node.
+The same message also arrives when a peer registers your node after flushing writes your node will not receive, for example right after startup.
 
 ## Benchmarks
 

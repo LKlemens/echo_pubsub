@@ -2,7 +2,7 @@ defmodule EchoPubSub.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/LKlemens/echo_pubsub"
-  @version "0.1.7"
+  @version "0.2.2"
 
   def project do
     [
@@ -11,6 +11,7 @@ defmodule EchoPubSub.MixProject do
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      test_coverage: [tool: ExCoveralls],
       deps: deps(),
       releases: [echo_pubsub: [include_executables_for: [:unix]]],
       dialyzer: [
@@ -41,6 +42,10 @@ defmodule EchoPubSub.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [coveralls: :test, "coveralls.html": :test, "coveralls.github": :test]]
+  end
+
   defp elixirc_paths(:test), do: ["lib", "test/support", "bench/fly"]
   defp elixirc_paths(:bench), do: ["lib", "bench/fly"]
   defp elixirc_paths(_), do: ["lib"]
@@ -49,11 +54,15 @@ defmodule EchoPubSub.MixProject do
   # The :bench release (Fly cluster) starts the bench app; the published library
   # never does — it stays a plain adapter.
   def application do
-    [extra_applications: [:logger]] ++ bench_mod(Mix.env())
+    [extra_applications: [:logger] ++ test_applications(Mix.env())] ++ bench_mod(Mix.env())
   end
 
   defp bench_mod(:bench), do: [mod: {EchoPubSub.Bench.App, []}]
   defp bench_mod(_), do: []
+
+  # :tools provides :cover, which the test cluster uses in coverage runs.
+  defp test_applications(:test), do: [:tools]
+  defp test_applications(_), do: []
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
@@ -65,7 +74,9 @@ defmodule EchoPubSub.MixProject do
       {:delta_crdt, "~> 0.6", only: [:dev, :test]},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:excoveralls, "~> 0.18", only: :test},
+      {:stream_data, "~> 1.1", only: :test}
     ]
   end
 end

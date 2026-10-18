@@ -9,7 +9,7 @@ defmodule EchoPubSub do
   You will also need to add `:echo_pubsub` to your deps:
 
       defp deps do
-        [{:echo_pubsub, "~> 0.1.0"}]
+        [{:echo_pubsub, "~> 0.2.2"}]
       end
 
   ## Options
@@ -19,7 +19,8 @@ defmodule EchoPubSub do
     * `:buffer_size` - The amount of messages to maintain in memory
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
     * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
-    * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning (default: 0.4)
+    * `:retry_interval` - The interval in milliseconds before retrying after a failed call (default: 200)
+    * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning; above 1.0 never warns (default: 0.4)
     * `:capacity_warning_interval` - Minimum seconds between warnings (default: 60)
 
   ## Configuration
@@ -43,6 +44,27 @@ defmodule EchoPubSub do
   A node's read cursor advances only when its task reports an ack, and at most one
   batch per node is in flight, so batches still arrive in cursor order.
 
+  ## Loading state at startup
+
+  Load state only after the node is connected and subscribed:
+
+    1. connect the node to the cluster
+    2. subscribe to the topics
+    3. load state from the source of truth (e.g. the database)
+
+  Each peer registers this node on its own, shortly after the node joins, and
+  only sends it the messages it flushes after that. A peer that had already
+  flushed writes when it registers this node sends `{:cursor_expired, peer}`, so
+  reload state on that message too: the load may have missed those writes.
+
+  A notice that arrives before step 2 reaches no subscriber, which is harmless
+  since step 3 follows. A node that subscribed early can get one notice per peer
+  right after startup, so it is worth collapsing reloads that arrive together.
+
+  A message broadcast before the load can still be delivered after it (batching
+  delays delivery, failed sends are retried), so its change may already be in the
+  loaded state: applying a message must tolerate seeing its change twice.
+
   ## Implementation
 
   The in memory buffer is a ring buffer, meaning that a constant number of messages are maintained and once
@@ -62,6 +84,7 @@ defmodule EchoPubSub do
 
   use Supervisor
 
+  alias EchoPubSub.Options
   alias EchoPubSub.Producer
   alias EchoPubSub.Worker
   alias Phoenix.PubSub.Adapter
@@ -82,8 +105,8 @@ defmodule EchoPubSub do
   @impl Adapter
   def direct_broadcast(adapter_name, node_name, topic, message, dispatcher) do
     GenServer.call(
-      {Module.concat(group(adapter_name), :Worker), node_name},
-      {:forward_to_local, topic, message, dispatcher}
+      {Worker.name(group(adapter_name)), node_name},
+      forward_to_local(topic, message, dispatcher)
     )
   end
 
@@ -108,56 +131,58 @@ defmodule EchoPubSub do
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
     adapter_name = Keyword.fetch!(opts, :adapter_name)
+    options = Options.resolve!(opts, Application.get_env(:echo_pubsub, name, []))
 
-    # Read from Application config, with opts taking precedence
-    config = Application.get_env(:echo_pubsub, name, [])
-    pool_size = Keyword.get(opts, :pool_size) || Keyword.get(config, :pool_size, 1)
-    buffer_size = Keyword.get(opts, :buffer_size) || Keyword.get(config, :buffer_size, 10_000)
-
-    batch_interval =
-      Keyword.get(opts, :batch_interval) || Keyword.get(config, :batch_interval, 200)
-
-    call_timeout =
-      Keyword.get(opts, :call_timeout) || Keyword.get(config, :call_timeout, 5000)
-
-    capacity_warning_threshold =
-      Keyword.get(opts, :capacity_warning_threshold) ||
-        Keyword.get(config, :capacity_warning_threshold, 0.4)
-
-    capacity_warning_interval =
-      Keyword.get(opts, :capacity_warning_interval) ||
-        Keyword.get(config, :capacity_warning_interval, 60)
-
-    [_ | groups] =
-      for number <- 1..pool_size do
-        :"#{adapter_name}#{number}"
-      end
-
-    # Use `adapter_name` for the first in the pool for backwards compatability
-    # with v2.0 when the pool_size is 1.
-    groups = [adapter_name | groups]
-
+    groups = groups(adapter_name, options.pool_size)
     :persistent_term.put(adapter_name, List.to_tuple(groups))
+    Enum.each(groups, &create_registrations_table/1)
 
-    children =
-      Enum.flat_map(groups, fn group ->
-        producer_id = Module.concat(group, :Producer)
-
-        [
-          Supervisor.child_spec(
-            {Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
-            id: Module.concat(group, :TaskSupervisor)
-          ),
-          Supervisor.child_spec(
-            {Producer,
-             {buffer_size, batch_interval, call_timeout, capacity_warning_threshold,
-              capacity_warning_interval, group}},
-            id: producer_id
-          ),
-          Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
-        ]
-      end)
-
+    children = Enum.flat_map(groups, &group_children(&1, name, options))
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  # Like PG2: `adapter_name`, `adapter_name2`... All nodes need the same pool_size.
+  @spec groups(atom(), pos_integer()) :: [atom()]
+  defp groups(adapter_name, pool_size) do
+    [adapter_name | for(number <- 2..pool_size//1, do: :"#{adapter_name}#{number}")]
+  end
+
+  # Owned by this supervisor, so it outlives worker restarts.
+  @spec create_registrations_table(atom()) :: atom()
+  defp create_registrations_table(group) do
+    :ets.new(Worker.registrations_table(group), [:set, :public, :named_table])
+  end
+
+  # Each side restarts under its own limit, so a crash-looping worker cannot take
+  # the producer, and with it the buffer every peer replays from, down too.
+  @spec group_children(atom(), atom(), Options.t()) :: [Supervisor.child_spec()]
+  defp group_children(group, name, options) do
+    producer_opts = [group: group] ++ Map.to_list(Map.delete(options, :pool_size))
+
+    producer_side = [
+      Supervisor.child_spec({Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
+        id: Module.concat(group, :TaskSupervisor)
+      ),
+      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer))
+    ]
+
+    worker_side = [
+      Supervisor.child_spec({Worker, {name, group}}, id: Module.concat(group, :Worker))
+    ]
+
+    [
+      supervisor_spec(Module.concat(group, ProducerSupervisor), producer_side, :rest_for_one),
+      supervisor_spec(Module.concat(group, WorkerSupervisor), worker_side, :one_for_one)
+    ]
+  end
+
+  @spec supervisor_spec(atom(), [Supervisor.child_spec()], Supervisor.strategy()) ::
+          Supervisor.child_spec()
+  defp supervisor_spec(name, children, strategy) do
+    %{
+      id: name,
+      start: {Supervisor, :start_link, [children, [strategy: strategy, name: name]]},
+      type: :supervisor
+    }
   end
 end

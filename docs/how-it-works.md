@@ -161,6 +161,12 @@ rejoins the cluster.
 so replay is impossible; it receives `{:cursor_expired, node}` and the application
 reloads from the database or another node.
 
+- **A node is registered after a peer's writes were flushed.** A peer starts a
+new node at its current cursor, so writes it flushed before the handshake never
+reach that node - for example when the handshake was delayed by a partition, or
+both nodes restarted. The peer flags the registration, and the node receives
+`{:cursor_expired, peer}` instead of missing those writes silently.
+
 - **A remote worker crashes.** The read cursor lives in the *producer's* state on the
 broadcasting node, so the worker crashing does not touch it. Its supervisor
 restarts the worker, it re-joins the `:pg` group, and the producer - seeing the
