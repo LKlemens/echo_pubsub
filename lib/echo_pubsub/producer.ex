@@ -17,6 +17,10 @@ defmodule EchoPubSub.Producer do
       producer reports `{:cursor_expired, node}`
     * `{:resume, node}` when the cursor survived and only the worker restarted
 
+  After a failed delivery the node is probed with `:ping` and gets the batch
+  again only once it answers, so a hung worker does not pile up one copy of the
+  batch per retry.
+
   A node more than `buffer_size` messages behind gets `{:expired, node}`
   instead of messages it can no longer be sent. Local subscribers never go
   through the producer: Phoenix delivers local broadcasts directly.

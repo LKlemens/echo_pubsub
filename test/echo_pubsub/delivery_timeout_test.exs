@@ -1,9 +1,12 @@
 defmodule EchoPubSub.DeliveryTimeoutTest do
   use EchoPubSub.ClusterCase, async: true
 
+  alias EchoPubSub.Producer.Remote
+
   # A call timeout does not pull the request out of the hung worker's mailbox, so
-  # every timed-out attempt runs on resume: delivery is at-least-once.
-  test "re-sends a batch after its delivery call times out" do
+  # the timed-out batch still runs on resume. The producer then pings instead of
+  # resending, so the batch arrives twice, not once per retry.
+  test "re-sends a batch once after its delivery call times out, not once per retry" do
     # Short timeout so the call gives up while the worker is still suspended.
     [peer1, peer2] =
       spawn_nodes(["timeout_node1", "timeout_node2"],
@@ -21,14 +24,32 @@ defmodule EchoPubSub.DeliveryTimeoutTest do
 
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :msg)
 
-    # Stays hung across several 100ms timeouts; each 200ms retry queues another
-    # copy of the batch in the worker's mailbox.
-    Process.sleep(500)
+    # Stays hung across several 100ms timeouts and 200ms retries; each retry
+    # queues only a ping behind the first batch.
+    Process.sleep(1_000)
     remote_run peer2, do: :sys.resume(PubSubTest.Adapter.Worker)
 
-    # Every queued copy runs on resume, so :msg arrives several times. Two are
-    # enough to prove the batch was re-sent; the exact count depends on timing.
+    # The queued batch, then the one resent after a ping is answered.
     assert_peer_receive peer2, :msg
     assert_peer_receive peer2, :msg
+    refute_peer_receive(peer2, :msg, 1_000)
+  end
+
+  describe "probe" do
+    test "a worker that rejects :ping as unknown (older version) is alive" do
+      pid = spawn_link(fn -> reply_once({:error, :bad_message}) end)
+      assert Remote.probe(pid, 1_000) == :ok
+    end
+
+    test "a worker that never answers is not alive" do
+      pid = spawn_link(fn -> Process.sleep(:infinity) end)
+      assert Remote.probe(pid, 50) == :error
+    end
+  end
+
+  defp reply_once(reply) do
+    receive do
+      {:"$gen_call", from, :ping} -> GenServer.reply(from, reply)
+    end
   end
 end

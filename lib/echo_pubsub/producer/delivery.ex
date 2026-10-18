@@ -2,6 +2,10 @@ defmodule EchoPubSub.Producer.Delivery do
   @moduledoc """
   Sends a registered node what it still needs, in a task. The node's cursor moves
   to the batch's target only when its worker acks, so a failed batch is resent.
+
+  A failed batch may still sit in a hung worker's mailbox, so the node is probed
+  with `:ping` before the batch is resent: the worker answers in mailbox order,
+  after handling that batch. Without it, every retry would queue another copy.
   """
 
   alias EchoPubSub.Producer.Remote
@@ -13,17 +17,33 @@ defmodule EchoPubSub.Producer.Delivery do
   @spec running?(State.t(), node()) :: boolean()
   def running?(state, node), do: Map.has_key?(state.in_flight, node)
 
-  @doc "Starts a delivery task to `pid` unless `node` is caught up. Only registered nodes get here."
+  @doc """
+  Starts a delivery task to `pid` unless `node` is caught up, or a probe if its
+  last delivery failed. Only registered nodes get here.
+  """
   @spec start(State.t(), pid(), node()) :: State.t()
   def start(state, pid, node) do
-    case State.pending(state, node) do
-      :caught_up -> state
-      batch -> start_task(state, pid, node, batch)
+    if State.suspect?(state, node) do
+      start_probe(state, pid, node)
+    else
+      case State.pending(state, node) do
+        :caught_up -> state
+        batch -> start_task(state, pid, node, batch)
+      end
     end
   end
 
   @doc "Applies the task's verdict, then flushes again if writes piled up behind the batch."
-  @spec finish(State.t(), node(), State.cursor(), Remote.verdict()) :: State.t()
+  @spec finish(State.t(), node(), State.cursor() | :probe, Remote.verdict() | :ok | :error) ::
+          State.t()
+  def finish(state, node, :probe, :ok) do
+    state |> State.untrack_delivery(node) |> State.clear_suspect(node) |> Timers.follow_up(node)
+  end
+
+  def finish(state, node, :probe, :error) do
+    state |> State.untrack_delivery(node) |> Timers.retry()
+  end
+
   def finish(state, node, target, verdict) do
     state
     |> State.untrack_delivery(node)
@@ -50,6 +70,14 @@ defmodule EchoPubSub.Producer.Delivery do
     State.track_delivery(state, node, task.ref, state.write_cursor)
   end
 
+  defp start_probe(state, pid, node) do
+    timeout = state.call_timeout
+    supervisor = Module.concat(state.group, TaskSupervisor)
+    task = Task.Supervisor.async_nolink(supervisor, fn -> Remote.probe(pid, timeout) end)
+
+    State.track_delivery(state, node, task.ref, :probe)
+  end
+
   defp apply_verdict(state, node, target, :ok), do: State.ack(state, node, target)
 
   defp apply_verdict(state, node, target, {:expired, missed}) do
@@ -59,8 +87,9 @@ defmodule EchoPubSub.Producer.Delivery do
 
   defp apply_verdict(state, node, _target, {:failed, batch_size}) do
     Telemetry.sync_failure(state.group, node, batch_size)
-    Timers.retry(state)
+    state |> State.suspect(node) |> Timers.retry()
   end
 
-  defp apply_verdict(state, _node, _target, :expired_failed), do: Timers.retry(state)
+  defp apply_verdict(state, node, _target, :expired_failed),
+    do: state |> State.suspect(node) |> Timers.retry()
 end

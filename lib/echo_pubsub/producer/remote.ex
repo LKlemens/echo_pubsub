@@ -16,6 +16,29 @@ defmodule EchoPubSub.Producer.Remote do
   def register(pid, message, timeout), do: call(pid, message, timeout)
 
   @doc """
+  Pings the worker to learn whether it answers again. A worker older than
+  `:ping` replies `{:error, :bad_message}`, which still proves it is alive.
+  """
+  @spec probe(pid(), timeout()) :: :ok | :error
+  def probe(pid, timeout) do
+    FaultInjection.if_ok do
+      do_probe(pid, timeout)
+    else
+      :error
+    end
+  end
+
+  defp do_probe(pid, timeout) do
+    case GenServer.call(pid, :ping, timeout) do
+      :ok -> :ok
+      {:error, :bad_message} -> :ok
+      _ -> :error
+    end
+  catch
+    _, _ -> :error
+  end
+
+  @doc """
   Sends a batch, or `{:expired, node()}` for a node too far behind, and returns
   the verdict the producer folds into its state.
   """

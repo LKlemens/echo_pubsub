@@ -92,6 +92,16 @@ defmodule EchoPubSub.Worker do
     {:reply, :ok, state}
   end
 
+  # A producer probes with :ping after a failed delivery before resending.
+  @impl true
+  def handle_call(:ping, _from, state) do
+    FaultInjection.if_ok do
+      {:reply, :ok, state}
+    else
+      {:reply, :error, state}
+    end
+  end
+
   @impl true
   def handle_call(_, _from, state) do
     {:reply, {:error, :bad_message}, state}
