@@ -44,7 +44,7 @@ defmodule EchoPubSub.Producer.Delivery do
   @spec finish(State.t(), node(), State.cursor() | :probe, Remote.verdict() | :ok | :error) ::
           State.t()
   def finish(state, node, :probe, :ok) do
-    state |> State.untrack_delivery(node) |> State.clear_suspect(node) |> Timers.flush_soon()
+    state |> State.untrack_delivery(node) |> State.clear_suspect(node) |> Timers.flush_now()
   end
 
   def finish(state, node, :probe, :error) do
