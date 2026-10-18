@@ -7,13 +7,36 @@ defmodule EchoPubSub.Producer.Remote do
 
   require EchoPubSub.FaultInjection, as: FaultInjection
 
-  @type registration :: {:register | :resume, node()}
+  @type registration :: {:register, node(), boolean()} | {:resume, node()}
   @type batch :: {:expired, pos_integer()} | {:messages, [term()]}
   @type verdict :: :ok | {:expired, pos_integer()} | :expired_failed | {:failed, pos_integer()}
 
-  @doc "Sends `{:register, node}` or `{:resume, node}` to the worker."
+  @doc "Sends `{:register, node, missed_writes?}` or `{:resume, node}` to the worker."
   @spec register(pid(), registration(), timeout(), atom()) :: :ok | :error
   def register(pid, message, timeout, group), do: call(pid, message, timeout, group)
+
+  @doc """
+  Pings the worker to learn whether it answers again. A worker older than
+  `:ping` replies `{:error, :bad_message}`, which still proves it is alive.
+  """
+  @spec probe(pid(), timeout(), atom()) :: :ok | :error
+  def probe(pid, timeout, group) do
+    FaultInjection.if_ok group do
+      do_probe(pid, timeout)
+    else
+      :error
+    end
+  end
+
+  defp do_probe(pid, timeout) do
+    case GenServer.call(pid, :ping, timeout) do
+      :ok -> :ok
+      {:error, :bad_message} -> :ok
+      _ -> :error
+    end
+  catch
+    _, _ -> :error
+  end
 
   @doc """
   Sends a batch, or `{:expired, node()}` for a node too far behind, and returns

@@ -50,12 +50,14 @@ defmodule EchoPubSub.TaskDownTest do
         ref
       end)
 
-    # 2. The task dies; the producer tries the registration again.
+    # 2. The task dies; the producer probes peer2 before trying the registration again.
     kill_task(peer1)
 
     assert_wait_for(fn ->
-      assert {ref, _start, _pid} = producer_state(peer1).registering[peer2.node]
-      assert is_reference(ref) and ref != old_ref
+      state = producer_state(peer1)
+      assert {nil, _start, _pid} = state.registering[peer2.node]
+      assert {ref, :probe} = state.in_flight[peer2.node]
+      assert ref != old_ref
     end)
 
     # 3. Once peer2 answers, it is registered and gets new messages.
@@ -64,6 +66,23 @@ defmodule EchoPubSub.TaskDownTest do
 
     remote_run peer1, do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", :after_retry)
     assert_peer_receive peer2, :after_retry
+  end
+
+  test "the producer ignores results and DOWNs of unknown tasks and stray messages", %{
+    peer1: peer1
+  } do
+    pid = remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer))
+    state = producer_state(peer1)
+
+    remote_run peer1, pid: pid do
+      send(pid, {make_ref(), :ok})
+      send(pid, {:DOWN, make_ref(), :process, self(), :normal})
+      send(pid, :garbage)
+    end
+
+    # get_state is answered after the three messages, so they have been handled.
+    assert producer_state(peer1) == state
+    assert remote_run(peer1, do: Process.whereis(PubSubTest.Adapter.Producer)) == pid
   end
 
   defp producer_state(peer) do

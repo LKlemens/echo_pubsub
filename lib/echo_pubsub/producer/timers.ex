@@ -4,14 +4,16 @@ defmodule EchoPubSub.Producer.Timers do
   alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Telemetry
 
-  @retry_interval 200
-
-  @doc "Flushes after `batch_interval` (at once when `0`), unless a flush is already pending."
-  @spec flush_soon(State.t()) :: State.t()
-  def flush_soon(%State{batch_interval: 0} = state) do
+  @doc "Flushes at once, regardless of `batch_interval` or a pending timer."
+  @spec flush_now(State.t()) :: State.t()
+  def flush_now(state) do
     send(self(), :flush_all)
     state
   end
+
+  @doc "Flushes after `batch_interval` (at once when `0`), unless a flush is already pending."
+  @spec flush_soon(State.t()) :: State.t()
+  def flush_soon(%State{batch_interval: 0} = state), do: flush_now(state)
 
   def flush_soon(state) do
     if is_nil(state.flush_timer) do
@@ -21,12 +23,12 @@ defmodule EchoPubSub.Producer.Timers do
     end
   end
 
-  @doc "Flushes again in #{@retry_interval} ms after a failure, unless a flush is already pending."
+  @doc "Flushes again after `retry_interval` ms following a failure, unless a flush is already pending."
   @spec retry(State.t()) :: State.t()
   def retry(state) do
     if is_nil(state.flush_timer) do
       Telemetry.retry_scheduled(state.group)
-      State.set_flush_timer(state, Process.send_after(self(), :flush_all, @retry_interval))
+      State.set_flush_timer(state, Process.send_after(self(), :flush_all, state.retry_interval))
     else
       state
     end

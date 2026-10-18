@@ -12,10 +12,14 @@ defmodule EchoPubSub.Producer do
   Remote calls run in tasks, so a slow or hung node never blocks broadcasts.
   A node is registered before its first batch:
 
-    * `{:register, node}` when the producer has no cursor for it (new node,
+    * `{:register, node, missed_writes?}` when the producer has no cursor for it (new node,
       forgotten node, or this producer restarted), so a worker that knew this
       producer reports `{:cursor_expired, node}`
     * `{:resume, node}` when the cursor survived and only the worker restarted
+
+  After a failed registration or delivery the node is probed with `:ping` and
+  is retried only once it answers, so a hung worker does not pile up one copy
+  of the call per retry.
 
   A node more than `buffer_size` messages behind gets `{:expired, node}`
   instead of messages it can no longer be sent. Local subscribers never go
@@ -38,6 +42,7 @@ defmodule EchoPubSub.Producer do
           | {:buffer_size, pos_integer()}
           | {:batch_interval, non_neg_integer()}
           | {:call_timeout, timeout()}
+          | {:retry_interval, pos_integer()}
           | {:capacity_warning_threshold, number()}
           | {:capacity_warning_interval, non_neg_integer()}
 
@@ -153,6 +158,7 @@ defmodule EchoPubSub.Producer do
   defp dispatch_node(pid, node, state) do
     cond do
       Registration.running?(state, node) or Delivery.running?(state, node) -> state
+      State.suspect?(state, node) -> Delivery.probe(state, pid, node)
       Registration.needed?(state, pid, node) -> Registration.start(state, pid, node)
       true -> Delivery.start(state, pid, node)
     end

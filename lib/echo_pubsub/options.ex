@@ -10,6 +10,7 @@ defmodule EchoPubSub.Options do
           buffer_size: pos_integer(),
           batch_interval: non_neg_integer(),
           call_timeout: pos_integer(),
+          retry_interval: pos_integer(),
           capacity_warning_threshold: number(),
           capacity_warning_interval: non_neg_integer()
         }
@@ -20,6 +21,7 @@ defmodule EchoPubSub.Options do
     {:buffer_size, 10_000, :pos_integer},
     {:batch_interval, 200, :non_neg_integer},
     {:call_timeout, 5000, :pos_integer},
+    {:retry_interval, 200, :pos_integer},
     {:capacity_warning_threshold, 0.4, :non_neg_number},
     {:capacity_warning_interval, 60, :non_neg_integer}
   ]

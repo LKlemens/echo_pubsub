@@ -2,6 +2,11 @@ defmodule EchoPubSub.Producer.Delivery do
   @moduledoc """
   Sends a registered node what it still needs, in a task. The node's cursor moves
   to the batch's target only when its worker acks, so a failed batch is resent.
+
+  A failed call may still sit in a hung worker's mailbox, so the node is probed
+  with `:ping` before the batch or registration is resent: the worker answers in
+  mailbox order, after handling that call. Without it, every retry would queue
+  another copy.
   """
 
   alias EchoPubSub.Producer.Remote
@@ -22,8 +27,31 @@ defmodule EchoPubSub.Producer.Delivery do
     end
   end
 
+  @doc """
+  Pings `pid` in a task after `node` failed a registration or delivery; the
+  next attempt waits for its answer. Tracked as the node's call in flight.
+  """
+  @spec probe(State.t(), pid(), node()) :: State.t()
+  def probe(state, pid, node) do
+    timeout = state.call_timeout
+    group = state.group
+    supervisor = Module.concat(state.group, TaskSupervisor)
+    task = Task.Supervisor.async_nolink(supervisor, fn -> Remote.probe(pid, timeout, group) end)
+
+    State.track_delivery(state, node, task.ref, :probe)
+  end
+
   @doc "Applies the task's verdict, then flushes again if writes piled up behind the batch."
-  @spec finish(State.t(), node(), State.cursor(), Remote.verdict()) :: State.t()
+  @spec finish(State.t(), node(), State.cursor() | :probe, Remote.verdict() | :ok | :error) ::
+          State.t()
+  def finish(state, node, :probe, :ok) do
+    state |> State.untrack_delivery(node) |> State.clear_suspect(node) |> Timers.flush_now()
+  end
+
+  def finish(state, node, :probe, :error) do
+    state |> State.untrack_delivery(node) |> Timers.retry()
+  end
+
   def finish(state, node, target, verdict) do
     state
     |> State.untrack_delivery(node)
@@ -62,8 +90,9 @@ defmodule EchoPubSub.Producer.Delivery do
 
   defp apply_verdict(state, node, _target, {:failed, batch_size}) do
     Telemetry.sync_failure(state.group, node, batch_size)
-    Timers.retry(state)
+    state |> State.suspect(node) |> Timers.retry()
   end
 
-  defp apply_verdict(state, _node, _target, :expired_failed), do: Timers.retry(state)
+  defp apply_verdict(state, node, _target, :expired_failed),
+    do: state |> State.suspect(node) |> Timers.retry()
 end

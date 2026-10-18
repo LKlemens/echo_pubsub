@@ -19,10 +19,13 @@ defmodule EchoPubSub.Producer.State do
     * `registering` - map of node to the `{task reference, start cursor, worker pid}` of its pending
       registration; the reference is `nil` while a failed attempt waits for its retry
     * `workers` - map of node to the worker pid this producer last registered with
-    * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it
+    * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it,
+      or `{task reference, :probe}` while it is being probed
+    * `suspects` - nodes whose last delivery failed; they are probed before the next batch
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
     * `call_timeout` - timeout in milliseconds for synchronous calls to remote nodes
+    * `retry_interval` - milliseconds to wait before flushing again after a failure
     * `capacity_warning_threshold` - buffer fill ratio that triggers a capacity warning
     * `capacity_warning_interval` - minimum seconds between capacity warnings
     * `flush_timer` - reference of the pending flush timer, or `nil` when none is scheduled
@@ -34,10 +37,12 @@ defmodule EchoPubSub.Producer.State do
     field(:read_cursors, %{node() => cursor()}, default: %{})
     field(:registering, %{node() => {reference() | nil, cursor(), pid()}}, default: %{})
     field(:workers, %{node() => pid()}, default: %{})
-    field(:in_flight, %{node() => {reference(), cursor()}}, default: %{})
+    field(:in_flight, %{node() => {reference(), cursor() | :probe}}, default: %{})
+    field(:suspects, MapSet.t(node()), default: MapSet.new())
     field(:buffer, RingBuffer.t())
     field(:batch_interval, timeout())
     field(:call_timeout, timeout())
+    field(:retry_interval, pos_integer())
     field(:capacity_warning_threshold, number())
     field(:capacity_warning_interval, non_neg_integer())
     field(:flush_timer, reference() | nil, enforce: false)
@@ -52,6 +57,7 @@ defmodule EchoPubSub.Producer.State do
       buffer: RingBuffer.new(Keyword.fetch!(opts, :buffer_size)),
       batch_interval: Keyword.fetch!(opts, :batch_interval),
       call_timeout: Keyword.fetch!(opts, :call_timeout),
+      retry_interval: Keyword.fetch!(opts, :retry_interval),
       capacity_warning_threshold: Keyword.fetch!(opts, :capacity_warning_threshold),
       capacity_warning_interval: Keyword.fetch!(opts, :capacity_warning_interval)
     }
@@ -100,7 +106,9 @@ defmodule EchoPubSub.Producer.State do
   one map: registrations and deliveries never share a ref.
   """
   @spec find_task(t(), reference()) ::
-          {:registration, node(), cursor(), pid()} | {:delivery, node(), cursor()} | :unknown
+          {:registration, node(), cursor(), pid()}
+          | {:delivery, node(), cursor() | :probe}
+          | :unknown
   def find_task(state, ref) do
     case {find_entry(state.registering, ref), find_entry(state.in_flight, ref)} do
       {{node, {_ref, start, pid}}, nil} -> {:registration, node, start, pid}
@@ -141,8 +149,8 @@ defmodule EchoPubSub.Producer.State do
     }
   end
 
-  @doc "Records a batch in flight to `node`, acking up to `target` once it succeeds."
-  @spec track_delivery(t(), node(), reference(), cursor()) :: t()
+  @doc "Records a batch in flight to `node`, acking up to `target` once it succeeds, or a `:probe`."
+  @spec track_delivery(t(), node(), reference(), cursor() | :probe) :: t()
   def track_delivery(state, node, ref, target) do
     %{state | in_flight: Map.put(state.in_flight, node, {ref, target})}
   end
@@ -150,6 +158,18 @@ defmodule EchoPubSub.Producer.State do
   @doc "Forgets the batch in flight to `node`."
   @spec untrack_delivery(t(), node()) :: t()
   def untrack_delivery(state, node), do: %{state | in_flight: Map.delete(state.in_flight, node)}
+
+  @doc "Whether `node`'s last delivery failed, so it must answer a probe first."
+  @spec suspect?(t(), node()) :: boolean()
+  def suspect?(state, node), do: MapSet.member?(state.suspects, node)
+
+  @doc "Marks `node` as suspect after a failed delivery."
+  @spec suspect(t(), node()) :: t()
+  def suspect(state, node), do: %{state | suspects: MapSet.put(state.suspects, node)}
+
+  @doc "Clears `node` after it answered a probe."
+  @spec clear_suspect(t(), node()) :: t()
+  def clear_suspect(state, node), do: %{state | suspects: MapSet.delete(state.suspects, node)}
 
   @doc "Records that `node` acked every message below `target`."
   @spec ack(t(), node(), cursor()) :: t()
@@ -167,7 +187,8 @@ defmodule EchoPubSub.Producer.State do
       state
       | read_cursors: Map.drop(state.read_cursors, nodes),
         workers: Map.drop(state.workers, nodes),
-        registering: Map.drop(state.registering, nodes)
+        registering: Map.drop(state.registering, nodes),
+        suspects: MapSet.difference(state.suspects, MapSet.new(nodes))
     }
   end
 

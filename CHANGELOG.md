@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.2.2 - 2026-10-18
+### Added
+- `:retry_interval` option: milliseconds to wait before flushing again after a
+  failed call (default: 200, the value that was hard-coded before).
+
+### Fixed
+- A node registered by a producer that had already flushed writes is now sent
+  `{:cursor_expired, node}`. Before, if its worker did not know that producer
+  (both restarted, or the producer's old boot never reached it), those writes were
+  skipped silently. Found with Jepsen tests that kill nodes.
+- A hung worker (paused VM, long GC) no longer gets one copy of the backlog per
+  retry. After a failed delivery the producer pings the node and resends the batch
+  only once it answers, so a timed-out batch arrives at most twice. Older workers
+  answer the ping with `{:error, :bad_message}`, which counts as alive. In Jepsen
+  runs with pauses, duplicates per node fell from up to 10,871 to 10-25. Once the
+  node answers, the producer flushes to it at once instead of waiting a
+  `batch_interval`.
+- A registration retried against a hung worker no longer sends its subscribers
+  one `{:cursor_expired, node}` per retry: the producer pings first here too, so
+  they get it at most twice.
+- Mixed-version clusters: registration now sends `{:register, node, missed_writes?}`,
+  which a v0.2.1 or older worker rejects, so delivery from an upgraded node to it
+  waits (messages stay buffered) until it is upgraded. Upgraded workers still
+  accept `{:register, node}` from older producers.
+
 ## v0.2.1 - 2026-10-18
 ### Fixed
 - A worker that keeps crashing no longer restarts its producer: each group's

@@ -13,6 +13,7 @@ defmodule EchoPubSubOptionsTest do
         buffer_size: -10,
         call_timeout: 0,
         call_timeout: :infinity,
+        retry_interval: 0,
         batch_interval: -1,
         batch_interval: "200",
         capacity_warning_interval: -1,
@@ -49,6 +50,7 @@ defmodule EchoPubSubOptionsTest do
       pool_size: 1,
       buffer_size: 1,
       call_timeout: 1,
+      retry_interval: 1,
       batch_interval: 0,
       capacity_warning_interval: 0,
       capacity_warning_threshold: 0

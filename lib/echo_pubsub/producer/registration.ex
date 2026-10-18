@@ -1,7 +1,8 @@
 defmodule EchoPubSub.Producer.Registration do
   @moduledoc """
-  Registers a remote worker before its first batch: `{:register, node}` when the
-  producer has no cursor for it, `{:resume, node}` when only its worker restarted.
+  Registers a remote worker before its first batch: `{:register, node, missed_writes?}`
+  when the producer has no cursor for it, `{:resume, node}` when only its worker
+  restarted.
   Runs in a task; `finish/5` folds the reply into the producer state.
   """
 
@@ -21,7 +22,7 @@ defmodule EchoPubSub.Producer.Registration do
   @spec start(State.t(), pid(), node()) :: State.t()
   def start(state, pid, node) do
     start = start_cursor(state, node)
-    message = message(state, node)
+    message = message(state, node, start)
     timeout = state.call_timeout
     group = state.group
     supervisor = Module.concat(state.group, TaskSupervisor)
@@ -45,14 +46,22 @@ defmodule EchoPubSub.Producer.Registration do
   end
 
   def finish(state, node, start, pid, :error) do
-    state |> State.registration_failed(node, start, pid) |> Timers.retry()
+    state |> State.registration_failed(node, start, pid) |> State.suspect(node) |> Timers.retry()
   end
 
-  # A producer that still holds the node's cursor (its worker restarted) has lost
-  # nothing, so it resumes: the worker records it without a cursor_expired.
-  defp message(state, node) do
-    if Map.has_key?(state.read_cursors, node), do: {:resume, node()}, else: {:register, node()}
+  # Writes below the start were flushed before this registration and never reach
+  # the node, so the flag tells its worker to send cursor_expired.
+  defp message(state, node, start) do
+    if known?(state, node),
+      do: {:resume, node()},
+      else: {:register, node(), missed_writes?(start)}
   end
+
+  defp known?(state, node), do: Map.has_key?(state.read_cursors, node)
+
+  # Possibly missed: those writes are never sent, but the node may already hold
+  # their changes, e.g. from a state load after they were written.
+  defp missed_writes?(start), do: start > 0
 
   # On the first attempt the node joins the current batch window: it starts at
   # the cursor the last flush ended at (the local node's cursor), so it gets every
