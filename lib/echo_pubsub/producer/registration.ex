@@ -43,7 +43,7 @@ defmodule EchoPubSub.Producer.Registration do
   end
 
   def finish(state, node, start, pid, :error) do
-    state |> State.registration_failed(node, start, pid) |> Timers.retry()
+    state |> State.registration_failed(node, start, pid) |> State.suspect(node) |> Timers.retry()
   end
 
   # Writes below the start were flushed before this registration and never reach

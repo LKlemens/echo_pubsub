@@ -50,12 +50,14 @@ defmodule EchoPubSub.TaskDownTest do
         ref
       end)
 
-    # 2. The task dies; the producer tries the registration again.
+    # 2. The task dies; the producer probes peer2 before trying the registration again.
     kill_task(peer1)
 
     assert_wait_for(fn ->
-      assert {ref, _start, _pid} = producer_state(peer1).registering[peer2.node]
-      assert is_reference(ref) and ref != old_ref
+      state = producer_state(peer1)
+      assert {nil, _start, _pid} = state.registering[peer2.node]
+      assert {ref, :probe} = state.in_flight[peer2.node]
+      assert ref != old_ref
     end)
 
     # 3. Once peer2 answers, it is registered and gets new messages.
