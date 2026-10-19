@@ -133,7 +133,7 @@ The same message also arrives when a peer registers your node after flushing wri
 
 ## Benchmarks
 
-Verified end-to-end on a real Fly.io cluster (fra, `performance-4x`), v0.2.2,
+Verified end-to-end on a real Fly.io cluster (fra, `performance-4x`), v0.2.3,
 `pool_size=1`; every node receives every message, no loss.
 
 Throughput under full load (`publishers=4`, 10 B payload):
@@ -143,27 +143,32 @@ Throughput under full load (`publishers=4`, 10 B payload):
 | 3     | ~127k msg/s          | ~96k msg/s         |
 | 4     | ~124k msg/s          | ~92k msg/s         |
 
-Latency and cost at a steady rate: 3 nodes, 30 B payload, three separate runs at
-100, 1,000 and 10,000 msg/s, 10 s each:
+Latency and cost at a steady rate: 3 nodes, 30 B payload, one publisher, 10 s
+per rate; the top rows are the most one publisher reached:
 
-| `batch_interval` | rate (msg/s) | remote p50 | remote p99 | flushes/s | publisher CPU |
-|-----------------:|-------------:|-----------:|-----------:|----------:|--------------:|
-| 0                | 100          | 2.1 ms     | 3.4 ms     | 100       | 0.5%          |
-| 0                | 1,000        | 2.1 ms     | 4.1 ms     | 1,998     | 2.9%          |
-| 0                | 10,000       | 2.4 ms     | 4.2 ms     | 11,125    | 4.3%          |
-| 100              | 100          | 53.4 ms    | 103.6 ms   | 9         | 0.1%          |
-| 100              | 1,000        | 53.6 ms    | 103.6 ms   | 10        | 0.3%          |
-| 100              | 10,000       | 57.4 ms    | 106.2 ms   | 10        | 1.2%          |
+| `batch_interval` | msg/s  | remote p50 | calls/s per node | msgs/call | publisher CPU |
+|-----------------:|-------:|-----------:|-----------------:|----------:|--------------:|
+| 0                | 100    | 1.6 ms     | 100              | 1         | 0.5%          |
+| 0                | 10,000 | 2.1 ms     | 677              | 15        | 4.3%          |
+| 0                | 65,911 | 1.3 ms     | 953              | 69        | 17.3%         |
+| 100              | 100    | 52.8 ms    | 9                | 11        | 0.2%          |
+| 100              | 10,000 | 56.7 ms    | 10               | 1,019     | 1.3%          |
+| 100              | 99,820 | 94.7 ms    | 9                | 10,697    | 12.0%         |
 
-CPU is the share of all 4 vCPUs on the publishing node.
+CPU is the share of all 4 vCPUs on the publishing node. Calls come from the
+`[:echo_pubsub, :sync, :batch]` telemetry event.
 
 Only one batch per node is in flight, and writes that land meanwhile go out
-together in the next one, so `batch_interval=0` batches on its own under load and
-its throughput stays close to `100`. The setting trades latency for cost:
-`0` delivers ~25x faster, while a timer sends far fewer calls and uses less CPU,
-which matters more as message rate and node count grow. Payload size matters too:
-200 B costs ~20-55% throughput against 10-30 B, so send small deltas, not whole
-objects.
+together in the next one, so `batch_interval=0` batches on its own: calls level
+off at ~700-1,000 per node per second and batches grow with the rate instead.
+The setting trades latency for cost: `0` delivers ~25-70x faster, while a timer
+sends far fewer, bigger calls and uses less CPU, which matters more as message
+rate and node count grow. `0` also caps throughput lower: one publishing
+process tops out at ~66k msg/s against ~100k with `100`, because the producer
+runs a flush pass between its synchronous writes, and with 4 publishers at 10 B
+it reaches ~96k against ~127k (at 30-200 B payloads `0` is level or ahead).
+Payload size matters too: 200 B costs ~20-55% throughput against 10-30 B, so
+send small deltas, not whole objects.
 
 - **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
   branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
