@@ -44,10 +44,11 @@ each node's batch to its own task (one synchronous, acked call per flush); its
   message was a synchronous 6PN round trip.
 - **`batch=100` is ~1.5-2x faster than before** for the same reason: the producer
   keeps accepting writes while a flush is on the wire.
-- **`batch=0` and `batch=100` are now close.** `batch=100` is ~20-40% ahead at
-  10-20 B; `batch=0` is ~3-20% ahead at 30-200 B. With one batch in flight per
-  node, the in-flight round trip already sets the batch size, so the timer adds
-  little either way. They differ in latency and cost; see the next point.
+- **Under full load the gap depends on payload.** `batch=100` is ~20-40% ahead
+  at 10-20 B; `batch=0` is level or ~3-20% ahead at 30-200 B. With one batch in
+  flight per node, the in-flight round trip already sets the batch size, so the
+  timer adds little here. With a single publisher `batch=0` falls further
+  behind (see below), and the two differ in latency and cost.
 - **Below full load, `batch=0` trades CPU for ~25x lower latency.** This bench
   floods the producer, so it shows neither. At a steady rate
   ([results-fra-rate.md](results-fra-rate.md)), runs from 100 to 100,000 msg/s
@@ -62,7 +63,7 @@ each node's batch to its own task (one synchronous, acked call per flush); its
   - *CPU:* `batch=0` uses ~2-10x more on the publisher: 0.5-4.3% of 4 vCPUs up to
     10k msg/s against 0.2-1.3%, and 11.0% against 3.9% at 30k.
   - *One publisher's ceiling:* with `batch=0` a single publishing process tops
-    out at ~66k msg/s (asked for 100k), against ~100k with `batch=100`: the
+    out at ~66k msg/s, against ~100k with `batch=100`: the
     producer runs a flush pass between its synchronous writes.
 - **Payload size still bites**: 200 B costs ~20-55% against 10-30 B.
 - **A 4th node costs ~5-25%**: one more acked batch per flush.

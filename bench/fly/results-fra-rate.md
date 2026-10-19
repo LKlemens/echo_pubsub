@@ -1,7 +1,8 @@
 # Fly.io benchmark — steady rate, batch_interval 0 vs 100 (fra)
 
-The throughput bench floods the producer, and there `batch_interval: 0` came out
-close to `100`. This one publishes at a fixed rate, the way most apps do, to show
+The throughput bench floods the producer from 4 publishers, and there
+`batch_interval: 0` came out within ~25% of `100` (ahead at 30-200 B payloads).
+This one publishes at a fixed rate, the way most apps do, to show
 what each setting costs in calls, CPU and latency. Produced by
 `EchoPubSub.RateBench.run()`.
 
@@ -21,8 +22,8 @@ what each setting costs in calls, CPU and latency. Produced by
 - **Latency:** from `broadcast!` on the publisher to a subscriber, on the
   publisher itself (local) and on the two other nodes (remote).
 - All rows delivered every message to every node.
-- **Version:** v0.2.2 (same behaviour as v0.2.3) plus the unreleased `[:echo_pubsub, :sync, :batch]` event,
-  `benchmark` branch, run on 2026-10-19. These runs also had an experimental
+- **Version:** v0.2.2 plus the `[:echo_pubsub, :sync, :batch]` event (same
+  behaviour as main after v0.2.3), run on 2026-10-19. These runs also had an experimental
   change that let writes queued together share one flush; it changed nothing
   measurable here and was dropped.
 
@@ -69,8 +70,8 @@ Run on 2026-10-19, same version.
   holds it at 10 calls per node per second, with batches of up to ~1,000.
   Higher up, `0` stays at ~1,000 calls per node per second while batches grow
   to 30 messages at 30k msg/s and ~70 at 66k msg/s.
-- **With `0`, one publisher tops out at ~66k msg/s.** Asked for 100k, it reached
-  65,911; with `100` it reached 99,820. Each `broadcast!` is a synchronous call
+- **With `0`, one publisher tops out at ~66k msg/s**, about a third below `100`:
+  at a 100k target it reached 65,911, against 99,820 with `100`. Each `broadcast!` is a synchronous call
   to the producer, and with `0` the producer runs a flush pass after every write
   before it takes the next one. Several publishers (or `pool_size > 1`) should
   go further; this run did not test that. Latency stays low meanwhile: remote p50 1.3 ms, p99 7.7 ms.
