@@ -9,6 +9,10 @@ A Phoenix.PubSub adapter that distributes messages between nodes using the erlan
 
 This means that a transient network failure - even one as short as ~1ms, with the nodes still connected to the cluster - does not silently lose messages. Anything a node did not acknowledge stays buffered and is replayed to it, in order, as soon as delivery succeeds again, thanks to a buffer of messages and read cursors.
 
+New to the idea? [At-least-once PubSub](https://klemens.blog/blog/at-least-once-pubsub/)
+is a gentle introduction to why the default adapter can drop messages and how
+EchoPubSub prevents it.
+
 See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
 
 ## Demo
@@ -83,7 +87,7 @@ for worked examples.
 ```elixir
 def deps do
   [
-    {:echo_pubsub, "~> 0.2.2"}
+    {:echo_pubsub, "~> 0.2.3"}
   ]
 end
 ```
@@ -129,25 +133,47 @@ The same message also arrives when a peer registers your node after flushing wri
 
 ## Benchmarks
 
-Verified end-to-end throughput on a real Fly.io cluster (fra, `performance-4x`),
-every node receives every message, no loss, at `batch_interval=100`,
-`pool_size=1`, `publishers=4`, 10 B payload:
+Verified end-to-end on a real Fly.io cluster (fra, `performance-4x`), v0.2.3,
+`pool_size=1`; every node receives every message, no loss.
 
-| nodes | Fly.io (fra) |
-|------:|-------------:|
-| 3     | ~79k msg/s   |
-| 4     | ~75k msg/s   |
+Throughput under full load (`publishers=4`, 10 B payload):
 
-Delivery is network-bound (Fly's private WireGuard mesh), and **batching is the
-dominant lever** -
-`batch_interval=0` collapses to ~1k msg/s (each message becomes its own acked
-round-trip). Small payloads (10–30 B) barely move the numbers, but a 200 B
-whole-object payload cuts 4-node throughput ~42% - so send small deltas, not whole
-objects.
+| nodes | `batch_interval=100` | `batch_interval=0` |
+|------:|---------------------:|-------------------:|
+| 3     | ~127k msg/s          | ~96k msg/s         |
+| 4     | ~124k msg/s          | ~92k msg/s         |
+
+Latency and cost at a steady rate: 3 nodes, 30 B payload, one publisher, 10 s
+per rate; the top rows are the most one publisher reached:
+
+| `batch_interval` | msg/s  | remote p50 | calls/s per node | msgs/call | publisher CPU |
+|-----------------:|-------:|-----------:|-----------------:|----------:|--------------:|
+| 0                | 100    | 1.6 ms     | 100              | 1         | 0.5%          |
+| 0                | 10,000 | 2.1 ms     | 677              | 15        | 4.3%          |
+| 0                | 65,911 | 1.3 ms     | 953              | 69        | 17.3%         |
+| 100              | 100    | 52.8 ms    | 9                | 11        | 0.2%          |
+| 100              | 10,000 | 56.7 ms    | 10               | 1,019     | 1.3%          |
+| 100              | 99,820 | 94.7 ms    | 9                | 10,697    | 12.0%         |
+
+CPU is the share of all 4 vCPUs on the publishing node. Calls come from the
+`[:echo_pubsub, :sync, :batch]` telemetry event.
+
+Only one batch per node is in flight, and writes that land meanwhile go out
+together in the next one, so `batch_interval=0` batches on its own: calls level
+off at ~700-1,000 per node per second and batches grow with the rate instead.
+The setting trades latency for cost: `0` delivers ~25-70x faster, while a timer
+sends far fewer, bigger calls and uses less CPU, which matters more as message
+rate and node count grow. `0` also caps throughput lower: one publishing
+process tops out at ~66k msg/s against ~100k with `100`, because the producer
+runs a flush pass between its synchronous writes, and with 4 publishers at 10 B
+it reaches ~96k against ~127k (at 30-200 B payloads `0` is level or ahead).
+Payload size matters too: 200 B costs ~20-55% throughput against 10-30 B, so
+send small deltas, not whole objects.
 
 - **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
   branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
-- Detailed [results](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
+- Detailed results: [throughput](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md),
+  [steady rate](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-rate.md).
 
 ## Credits
 

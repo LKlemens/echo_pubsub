@@ -21,7 +21,7 @@ defmodule EchoPubSub.Producer.State do
     * `workers` - map of node to the worker pid this producer last registered with
     * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it,
       or `{task reference, :probe}` while it is being probed
-    * `suspects` - nodes whose last delivery failed; they are probed before the next batch
+    * `suspects` - set (map to `true`) of nodes whose last delivery failed; they are probed before the next batch
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
     * `call_timeout` - timeout in milliseconds for synchronous calls to remote nodes
@@ -38,7 +38,7 @@ defmodule EchoPubSub.Producer.State do
     field(:registering, %{node() => {reference() | nil, cursor(), pid()}}, default: %{})
     field(:workers, %{node() => pid()}, default: %{})
     field(:in_flight, %{node() => {reference(), cursor() | :probe}}, default: %{})
-    field(:suspects, MapSet.t(node()), default: MapSet.new())
+    field(:suspects, %{node() => true}, default: %{})
     field(:buffer, RingBuffer.t())
     field(:batch_interval, timeout())
     field(:call_timeout, timeout())
@@ -161,15 +161,15 @@ defmodule EchoPubSub.Producer.State do
 
   @doc "Whether `node`'s last delivery failed, so it must answer a probe first."
   @spec suspect?(t(), node()) :: boolean()
-  def suspect?(state, node), do: MapSet.member?(state.suspects, node)
+  def suspect?(state, node), do: Map.has_key?(state.suspects, node)
 
   @doc "Marks `node` as suspect after a failed delivery."
   @spec suspect(t(), node()) :: t()
-  def suspect(state, node), do: %{state | suspects: MapSet.put(state.suspects, node)}
+  def suspect(state, node), do: %{state | suspects: Map.put(state.suspects, node, true)}
 
   @doc "Clears `node` after it answered a probe."
   @spec clear_suspect(t(), node()) :: t()
-  def clear_suspect(state, node), do: %{state | suspects: MapSet.delete(state.suspects, node)}
+  def clear_suspect(state, node), do: %{state | suspects: Map.delete(state.suspects, node)}
 
   @doc "Records that `node` acked every message below `target`."
   @spec ack(t(), node(), cursor()) :: t()
@@ -188,7 +188,7 @@ defmodule EchoPubSub.Producer.State do
       | read_cursors: Map.drop(state.read_cursors, nodes),
         workers: Map.drop(state.workers, nodes),
         registering: Map.drop(state.registering, nodes),
-        suspects: MapSet.difference(state.suspects, MapSet.new(nodes))
+        suspects: Map.drop(state.suspects, nodes)
     }
   end
 
