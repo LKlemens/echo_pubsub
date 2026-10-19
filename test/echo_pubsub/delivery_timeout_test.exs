@@ -2,6 +2,7 @@ defmodule EchoPubSub.DeliveryTimeoutTest do
   use EchoPubSub.ClusterCase, async: true
 
   alias EchoPubSub.Producer.Remote
+  alias EchoPubSub.Producer.State
 
   # A call timeout does not pull the request out of the hung worker's mailbox, so
   # the timed-out batch still runs on resume. The producer then pings instead of
@@ -47,7 +48,7 @@ defmodule EchoPubSub.DeliveryTimeoutTest do
 
     assert_wait_for(5_000, fn ->
       state = remote_run(peer1, do: :sys.get_state(PubSubTest.Adapter.Producer))
-      assert MapSet.member?(state.suspects, peer2.node)
+      assert State.suspect?(state, peer2.node)
     end)
 
     # 3. Once the fault clears, the next ping succeeds and peer2 registers
