@@ -5,8 +5,9 @@ defmodule EchoPubSub.RateBench do
   producer, this shows moderate traffic, where `batch_interval: 0` may send one
   call per message and a timer adds its delay to every message.
 
-  Per row: flushes per second on the publisher, CPU on the publisher and on one
-  receiver, and per-message latency (send to subscriber) as p50, p99 and max.
+  Per row: flushes and batch calls per second on the publisher (a flush that
+  finds a batch in flight sends nothing), messages per call, CPU on the publisher
+  and on one receiver, and per-message latency (send to subscriber) as p50, p99 and max.
   Latency on remote nodes compares two clocks, so the publisher's own local
   latency is reported as a baseline.
 
@@ -62,14 +63,15 @@ defmodule EchoPubSub.RateBench do
     cpu_node = List.first(receivers, publisher)
 
     Enum.each(nodes, &:erpc.call(&1, Collector, :restart, [@pubsub, @topic]))
-    install_flush_counter()
+    install_counters()
 
     cpu_before = sample_cpu([publisher, cpu_node])
     started = System.monotonic_time(:millisecond)
     publish_at(rate, total, payload, started)
     window_ms = System.monotonic_time(:millisecond) - started
     cpu_after = sample_cpu([publisher, cpu_node])
-    flushes = :counters.get(:persistent_term.get(@counter_key), 1)
+    counters = :persistent_term.get(@counter_key)
+    [flushes, calls, batched] = Enum.map(1..3, &:counters.get(counters, &1))
 
     # Latencies are only complete once every node has every message.
     stats = Enum.map(nodes, &:erpc.call(&1, Collector, :await, [total, 10_000], 15_000))
@@ -79,7 +81,10 @@ defmodule EchoPubSub.RateBench do
 
     %{
       rate: rate,
+      sent_per_s: round(total * 1_000 / window_ms),
       flushes_per_s: round(flushes * 1_000 / window_ms),
+      calls_per_s: round(calls * 1_000 / window_ms),
+      msgs_per_call: if(calls > 0, do: Float.round(batched / calls, 1)),
       publisher_cpu: cpu_publisher,
       receiver_cpu: cpu_receiver,
       local_p50: percentile(Enum.sort(local.latencies), 50),
@@ -107,16 +112,30 @@ defmodule EchoPubSub.RateBench do
     publish_at(rate, total, payload, started, max(sent, due))
   end
 
-  defp install_flush_counter do
-    ref = :counters.new(1, [:write_concurrency])
+  # Slots: 1 flushes, 2 batch calls to remote nodes, 3 messages in those calls.
+  defp install_counters do
+    ref = :counters.new(3, [:write_concurrency])
     :persistent_term.put(@counter_key, ref)
-    handler = "rate-bench-flushes"
-    _ = :telemetry.detach(handler)
-    :telemetry.attach(handler, [:echo_pubsub, :buffer, :flush], &__MODULE__.count_flush/4, ref)
+
+    events = [
+      {"rate-bench-flushes", [:echo_pubsub, :buffer, :flush]},
+      {"rate-bench-batches", [:echo_pubsub, :sync, :batch]}
+    ]
+
+    for {handler, event} <- events do
+      _ = :telemetry.detach(handler)
+      :ok = :telemetry.attach(handler, event, &__MODULE__.count/4, ref)
+    end
   end
 
   @doc false
-  def count_flush(_event, _measurements, _meta, ref), do: :counters.add(ref, 1, 1)
+  def count([:echo_pubsub, :buffer, :flush], _measurements, _meta, ref),
+    do: :counters.add(ref, 1, 1)
+
+  def count([:echo_pubsub, :sync, :batch], %{batch_size: size}, _meta, ref) do
+    :counters.add(ref, 2, 1)
+    :counters.add(ref, 3, size)
+  end
 
   defp sample_cpu(nodes), do: Enum.map(nodes, &:erpc.call(&1, :scheduler, :sample_all, []))
 
@@ -136,8 +155,8 @@ defmodule EchoPubSub.RateBench do
 
     ## steady rate, nodes=#{nodes} (latency in ms; remote = other nodes' clocks)
 
-    batch_ms | rate | flushes/s | publisher_cpu% | receiver_cpu% | local_p50 | remote_p50 | remote_p99 | remote_max | delivered
-    ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--\
+    batch_ms | rate | sent/s | flushes/s | calls/s | msgs/call | publisher_cpu% | receiver_cpu% | local_p50 | remote_p50 | remote_p99 | remote_max | delivered
+    ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--\
     """
   end
 
@@ -146,7 +165,10 @@ defmodule EchoPubSub.RateBench do
       [
         row.batch_ms,
         row.rate,
+        row.sent_per_s,
         row.flushes_per_s,
+        row.calls_per_s,
+        row.msgs_per_call || "-",
         row.publisher_cpu,
         row.receiver_cpu,
         ms(row.local_p50),

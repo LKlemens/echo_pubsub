@@ -50,14 +50,20 @@ each node's batch to its own task (one synchronous, acked call per flush); its
   little either way. They differ in latency and cost; see the next point.
 - **Below full load, `batch=0` trades CPU for ~25x lower latency.** This bench
   floods the producer, so it shows neither. At a steady rate
-  ([results-fra-rate.md](results-fra-rate.md)), 100-10,000 msg/s on 3 nodes:
-  - *Latency:* `batch=0` delivers to remote nodes in ~2 ms p50 / ~4 ms p99,
-    against ~53 ms / ~104 ms at `batch=100`, where every message waits for the
-    timer.
-  - *Cost:* `batch=0` runs ~100-1,000x more flushes (about one per message,
-    against a fixed 10/s) and ~3-10x more publisher CPU, though still only
-    0.5-4.3% of 4 vCPUs against 0.1-1.2%. Calls grow with message rate × nodes,
-    so the cost rises on bigger clusters.
+  ([results-fra-rate.md](results-fra-rate.md)), runs from 100 to 100,000 msg/s
+  on 3 nodes:
+  - *Latency:* `batch=0` delivers to remote nodes in ~1-2 ms p50 / ~3-8 ms p99,
+    against ~53-95 ms / ~104-156 ms at `batch=100`, where every message waits for
+    the timer.
+  - *Calls:* `batch=0` sends at most ~700-1,000 calls per node per second, capped
+    by the round trip since one batch per node is in flight; past that, batches
+    grow instead (~15 messages at 10k msg/s, ~70 at 66k). `batch=100` sends a
+    fixed 10. Each extra node adds its own stream of calls.
+  - *CPU:* `batch=0` uses ~2-10x more on the publisher: 0.5-4.3% of 4 vCPUs up to
+    10k msg/s against 0.2-1.3%, and 11.0% against 3.9% at 30k.
+  - *One publisher's ceiling:* with `batch=0` a single publishing process tops
+    out at ~66k msg/s (asked for 100k), against ~100k with `batch=100`: the
+    producer runs a flush pass between its synchronous writes.
 - **Payload size still bites**: 200 B costs ~20-55% against 10-30 B.
 - **A 4th node costs ~5-25%**: one more acked batch per flush.
 - **Single producer:** `pool_size = 1` funnels all sends through one producer;

@@ -173,8 +173,11 @@ fly scale count 0 -c bench/fly/fly.toml
 ## Steady rate / what batch_interval costs
 
 `EchoPubSub.RateBench` (`fly/rate_bench.ex`) publishes at a fixed rate instead of
-flooding the producer, once per `batch_interval`, and reports per row: flushes per
-second on the publisher, CPU on the publisher and on one receiver, and message
+flooding the producer, once per `batch_interval`, and reports per row: the rate
+actually sent (one publisher may fall short of the target), flushes and
+batch calls per second on the publisher (from the `[:echo_pubsub, :buffer, :flush]`
+and `[:echo_pubsub, :sync, :batch]` events) with messages per call, CPU on the
+publisher and on one receiver, and message
 latency (send to subscriber) as p50, p99 and max. Remote latency compares two
 machines' clocks, so the publisher's own local latency is printed as a baseline.
 
@@ -183,6 +186,7 @@ machines' clocks, so the publisher's own local latency is printed as a baseline.
 /app/bin/echo_pubsub rpc 'EchoPubSub.RateBench.run()'
 # defaults: rates 100/1_000/10_000 msg/s, 10 s each, 30 B payload, batch_intervals [0, 100]
 /app/bin/echo_pubsub rpc 'EchoPubSub.RateBench.run(rates: [1_000], batch_intervals: [0, 20, 100])'
+/app/bin/echo_pubsub rpc 'EchoPubSub.RateBench.run(rates: [30_000, 100_000])'
 ```
 
 Results and findings: [`fly/results-fra-rate.md`](fly/results-fra-rate.md).
