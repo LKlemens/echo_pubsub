@@ -74,8 +74,14 @@ defmodule EchoPubSub.Producer.Delivery do
     task =
       Task.Supervisor.async_nolink(supervisor, fn -> Remote.deliver(pid, batch, timeout) end)
 
+    report_batch(state, node, batch)
     State.track_delivery(state, node, task.ref, state.write_cursor)
   end
+
+  defp report_batch(state, node, {:messages, messages}),
+    do: Telemetry.sync_batch(state.group, node, length(messages))
+
+  defp report_batch(_state, _node, {:expired, _missed}), do: :ok
 
   defp apply_verdict(state, node, target, :ok), do: State.ack(state, node, target)
 

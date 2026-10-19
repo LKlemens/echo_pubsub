@@ -85,4 +85,45 @@ defmodule EchoPubSub.BatchingTest do
     assert_peer_receive peer2, :batch_msg1
     assert_peer_receive peer2, :batch_msg2
   end
+
+  test "each batch sent to a node emits [:echo_pubsub, :sync, :batch] with its size and node" do
+    # 1. Two nodes; the batch timer never fires, so the flush is sent by hand.
+    [peer1, peer2] = spawn_nodes(["event_node1", "event_node2"], batch_interval: 60_000)
+    remote_run peer2, do: EchoPubSub.TestSubscriber.subscribe(PubSubTest, "topic")
+    assert_registered(peer2, peer1)
+
+    remote_run peer1 do
+      batches = :counters.new(2, [])
+      :persistent_term.put(:batch_counters, batches)
+
+      :telemetry.attach(
+        "batch-events",
+        [:echo_pubsub, :sync, :batch],
+        fn _, m, meta, ref ->
+          :counters.add(ref, 1, m.count)
+          :counters.add(ref, 2, m.batch_size)
+          :persistent_term.put(:batch_node, meta.node)
+        end,
+        batches
+      )
+    end
+
+    # 2. Three writes, one flush: one batch of three to peer2.
+    for i <- 1..3,
+        do:
+          remote_run(peer1, [i: i],
+            do: Phoenix.PubSub.broadcast!(PubSubTest, "topic", {:event, i})
+          )
+
+    remote_run peer1, do: send(PubSubTest.Adapter.Producer, :flush_all)
+    assert_peer_receive peer2, {:event, 3}
+
+    counts =
+      remote_run peer1 do
+        batches = :persistent_term.get(:batch_counters)
+        {:counters.get(batches, 1), :counters.get(batches, 2), :persistent_term.get(:batch_node)}
+      end
+
+    assert counts == {1, 3, peer2.node}
+  end
 end

@@ -23,6 +23,16 @@ defmodule EchoPubSub.Producer.Telemetry do
     )
   end
 
+  @doc "`[:echo_pubsub, :sync, :batch]`: a batch of `batch_size` was sent to `node`."
+  @spec sync_batch(atom(), node(), pos_integer()) :: :ok
+  def sync_batch(group, node, batch_size) do
+    :telemetry.execute(
+      [:echo_pubsub, :sync, :batch],
+      %{count: 1, batch_size: batch_size},
+      %{group: group, node: node}
+    )
+  end
+
   @doc "`[:echo_pubsub, :sync, :failure]`: a batch of `batch_size` to `node` failed."
   @spec sync_failure(atom(), node(), pos_integer()) :: :ok
   def sync_failure(group, node, batch_size) do
