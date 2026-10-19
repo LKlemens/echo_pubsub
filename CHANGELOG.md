@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.4 - 2026-10-19
+### Added
+- Telemetry event `[:echo_pubsub, :sync, :batch]` for every batch sent to a
+  remote node, with `count` and `batch_size` measurements and `group` and `node`
+  metadata: the success counterpart of `[:echo_pubsub, :sync, :failure]`, for
+  counting calls and batch sizes.
+
 ## v0.2.3 - 2026-10-19
 ### Added
 - A `pre-push` git hook in `.githooks/` that runs the CI checks (format, compile

@@ -87,7 +87,7 @@ for worked examples.
 ```elixir
 def deps do
   [
-    {:echo_pubsub, "~> 0.2.3"}
+    {:echo_pubsub, "~> 0.2.4"}
   ]
 end
 ```
