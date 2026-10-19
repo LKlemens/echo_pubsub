@@ -1,0 +1,8 @@
+**
+!mix.exs
+!mix.lock
+!lib/**
+!jepsen/node_app/**
+jepsen/node_app/_build
+jepsen/node_app/deps
+jepsen/node_app/tmp

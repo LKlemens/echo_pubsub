@@ -1,0 +1,20 @@
+# Builds the node_app release on the same Debian release as Jepsen's node
+# image, and exports only the tarball. Run from the echo_pubsub repo root:
+#
+#   docker build -f jepsen/node_app/Dockerfile.build -o jepsen/echo/resources .
+FROM hexpm/elixir:1.18.4-erlang-27.3.4.1-debian-bookworm-20250630-slim AS build
+
+ENV MIX_ENV=prod LANG=C.UTF-8
+RUN mix local.hex --force && mix local.rebar --force
+
+WORKDIR /src
+COPY mix.exs mix.lock ./
+COPY lib lib
+COPY jepsen/node_app jepsen/node_app
+
+WORKDIR /src/jepsen/node_app
+RUN mix deps.get --only prod && mix release --overwrite \
+ && tar -czf /node_app.tar.gz -C _build/prod/rel/node_app .
+
+FROM scratch
+COPY --from=build /node_app.tar.gz /node_app.tar.gz

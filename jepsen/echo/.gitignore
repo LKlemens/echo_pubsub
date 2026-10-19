@@ -1,0 +1,5 @@
+/target/
+/store/
+/resources/node_app.tar.gz
+.lein-*
+.nrepl-port
