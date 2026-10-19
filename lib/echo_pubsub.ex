@@ -9,7 +9,7 @@ defmodule EchoPubSub do
   You will also need to add `:echo_pubsub` to your deps:
 
       defp deps do
-        [{:echo_pubsub, "~> 0.2.2"}]
+        [{:echo_pubsub, "~> 0.2.3"}]
       end
 
   ## Options

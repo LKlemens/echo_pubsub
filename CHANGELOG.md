@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.3 - 2026-10-19
+### Added
+- A `pre-push` git hook in `.githooks/` that runs the CI checks (format, compile
+  with warnings as errors, credo, tests and dialyzer). Enable it with
+  `git config core.hooksPath .githooks`.
+
+### Changed
+- The README benchmarks show v0.2.2 numbers: throughput under full load, and
+  latency and cost at a steady rate for `batch_interval` 0 and 100.
+
+### Fixed
+- Dialyzer on OTP 28 no longer reports `contract_with_opaque` for
+  `EchoPubSub.Producer.State.new/2`: the producer keeps its suspect nodes in a
+  plain map instead of a `MapSet`.
+
 ## v0.2.2 - 2026-10-18
 ### Added
 - `:retry_interval` option: milliseconds to wait before flushing again after a

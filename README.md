@@ -9,6 +9,10 @@ A Phoenix.PubSub adapter that distributes messages between nodes using the erlan
 
 This means that a transient network failure - even one as short as ~1ms, with the nodes still connected to the cluster - does not silently lose messages. Anything a node did not acknowledge stays buffered and is replayed to it, in order, as soon as delivery succeeds again, thanks to a buffer of messages and read cursors.
 
+New to the idea? [At-least-once PubSub](https://klemens.blog/blog/at-least-once-pubsub/)
+is a gentle introduction to why the default adapter can drop messages and how
+EchoPubSub prevents it.
+
 See the [Docs](https://echo-pubsub.hexdocs.pm/EchoPubSub.html) for more information.
 
 ## Demo
@@ -83,7 +87,7 @@ for worked examples.
 ```elixir
 def deps do
   [
-    {:echo_pubsub, "~> 0.2.2"}
+    {:echo_pubsub, "~> 0.2.3"}
   ]
 end
 ```
