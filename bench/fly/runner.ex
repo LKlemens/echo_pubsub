@@ -90,7 +90,9 @@ defmodule EchoPubSub.Bench.Runner do
   # :pg member, and a peer worker torn down at the same instant is :noproc, which
   # crashes init. Serialized + a settle per node keeps peers up and lets :pg
   # leave/join propagate before the next restart. No-op when no such knob is given.
-  defp reconfigure_all(nodes, opts) do
+  @doc "Applies `pool_size`/`buffer_size`/`batch_interval` from `opts` on `nodes`, one at a time."
+  @spec reconfigure_all([node()], keyword()) :: :ok
+  def reconfigure_all(nodes, opts) do
     reconfig = Keyword.take(opts, [:pool_size, :buffer_size, :batch_interval])
 
     if reconfig != [] do
@@ -104,5 +106,7 @@ defmodule EchoPubSub.Bench.Runner do
       Logger.info("[bench] reconfigure done across cluster")
       Process.sleep(1_000)
     end
+
+    :ok
   end
 end

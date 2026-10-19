@@ -170,6 +170,23 @@ fly scale count 0 -c bench/fly/fly.toml
   There's no `fly.toml` key for this; it's a deploy-time flag. To fix an existing
   one: `fly machine destroy <standby-id> --force` then redeploy with `--ha=false`.
 
+## Steady rate / what batch_interval costs
+
+`EchoPubSub.RateBench` (`fly/rate_bench.ex`) publishes at a fixed rate instead of
+flooding the producer, once per `batch_interval`, and reports per row: flushes per
+second on the publisher, CPU on the publisher and on one receiver, and message
+latency (send to subscriber) as p50, p99 and max. Remote latency compares two
+machines' clocks, so the publisher's own local latency is printed as a baseline.
+
+```sh
+# Fly, from a console on any machine of the cluster
+/app/bin/echo_pubsub rpc 'EchoPubSub.RateBench.run()'
+# defaults: rates 100/1_000/10_000 msg/s, 10 s each, 30 B payload, batch_intervals [0, 100]
+/app/bin/echo_pubsub rpc 'EchoPubSub.RateBench.run(rates: [1_000], batch_intervals: [0, 20, 100])'
+```
+
+Results and findings: [`fly/results-fra-rate.md`](fly/results-fra-rate.md).
+
 ## One failing node / retry growth
 
 `EchoPubSub.RetryBench` (`fly/retry_bench.ex`) measures what one bad node costs.

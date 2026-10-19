@@ -54,15 +54,17 @@ defmodule EchoPubSub.MixProject do
   # The :bench release (Fly cluster) starts the bench app; the published library
   # never does — it stays a plain adapter.
   def application do
-    [extra_applications: [:logger] ++ test_applications(Mix.env())] ++ bench_mod(Mix.env())
+    [extra_applications: [:logger] ++ env_applications(Mix.env())] ++ bench_mod(Mix.env())
   end
 
   defp bench_mod(:bench), do: [mod: {EchoPubSub.Bench.App, []}]
   defp bench_mod(_), do: []
 
-  # :tools provides :cover, which the test cluster uses in coverage runs.
-  defp test_applications(:test), do: [:tools]
-  defp test_applications(_), do: []
+  # :tools provides :cover, which the test cluster uses in coverage runs;
+  # :runtime_tools provides :scheduler, which the rate bench samples CPU with.
+  defp env_applications(:test), do: [:tools, :runtime_tools]
+  defp env_applications(:bench), do: [:runtime_tools]
+  defp env_applications(_), do: []
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
