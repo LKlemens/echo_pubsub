@@ -129,25 +129,42 @@ The same message also arrives when a peer registers your node after flushing wri
 
 ## Benchmarks
 
-Verified end-to-end throughput on a real Fly.io cluster (fra, `performance-4x`),
-every node receives every message, no loss, at `batch_interval=100`,
-`pool_size=1`, `publishers=4`, 10 B payload:
+Verified end-to-end on a real Fly.io cluster (fra, `performance-4x`), v0.2.2,
+`pool_size=1`; every node receives every message, no loss.
 
-| nodes | Fly.io (fra) |
-|------:|-------------:|
-| 3     | ~79k msg/s   |
-| 4     | ~75k msg/s   |
+Throughput under full load (`publishers=4`, 10 B payload):
 
-Delivery is network-bound (Fly's private WireGuard mesh), and **batching is the
-dominant lever** -
-`batch_interval=0` collapses to ~1k msg/s (each message becomes its own acked
-round-trip). Small payloads (10–30 B) barely move the numbers, but a 200 B
-whole-object payload cuts 4-node throughput ~42% - so send small deltas, not whole
+| nodes | `batch_interval=100` | `batch_interval=0` |
+|------:|---------------------:|-------------------:|
+| 3     | ~127k msg/s          | ~96k msg/s         |
+| 4     | ~124k msg/s          | ~92k msg/s         |
+
+Latency and cost at a steady rate: 3 nodes, 30 B payload, three separate runs at
+100, 1,000 and 10,000 msg/s, 10 s each:
+
+| `batch_interval` | rate (msg/s) | remote p50 | remote p99 | flushes/s | publisher CPU |
+|-----------------:|-------------:|-----------:|-----------:|----------:|--------------:|
+| 0                | 100          | 2.1 ms     | 3.4 ms     | 100       | 0.5%          |
+| 0                | 1,000        | 2.1 ms     | 4.1 ms     | 1,998     | 2.9%          |
+| 0                | 10,000       | 2.4 ms     | 4.2 ms     | 11,125    | 4.3%          |
+| 100              | 100          | 53.4 ms    | 103.6 ms   | 9         | 0.1%          |
+| 100              | 1,000        | 53.6 ms    | 103.6 ms   | 10        | 0.3%          |
+| 100              | 10,000       | 57.4 ms    | 106.2 ms   | 10        | 1.2%          |
+
+CPU is the share of all 4 vCPUs on the publishing node.
+
+Only one batch per node is in flight, and writes that land meanwhile go out
+together in the next one, so `batch_interval=0` batches on its own under load and
+its throughput stays close to `100`. The setting trades latency for cost:
+`0` delivers ~25x faster, while a timer sends far fewer calls and uses less CPU,
+which matters more as message rate and node count grow. Payload size matters too:
+200 B costs ~20-55% throughput against 10-30 B, so send small deltas, not whole
 objects.
 
 - **How to run** (locally *and* on a Fly.io cloud cluster) - see the benchmark
   branch: [bench/README.md](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/README.md).
-- Detailed [results](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md).
+- Detailed results: [throughput](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-batching.md),
+  [steady rate](https://github.com/LKlemens/echo_pubsub/blob/benchmark/bench/fly/results-fra-rate.md).
 
 ## Credits
 
