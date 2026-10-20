@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+### Added
+- `:max_batch_size` option: the most messages sent to a node in one call, or
+  `:infinity` for no cap (default: `:infinity`, as before).
+
+### Changed
+- `direct_broadcast/5` sends the message to the worker instead of calling it, like
+  `Phoenix.PubSub.PG2`. It returns `:ok` at once and never exits the caller for an
+  unknown or unreachable node, as the adapter contract (`:ok | {:error, term}`)
+  requires. Before, an unreachable node exited the caller and a hung one blocked it
+  for 5 seconds, which `Phoenix.Tracker` and `Phoenix.Presence` felt on their
+  broadcast paths. During a rolling upgrade, a worker older than this version
+  receives the message as an unexpected info message, which a `GenServer` logs
+  and drops, so direct broadcasts to nodes not yet upgraded are lost. Producers on
+  older versions still reach the new worker, which keeps its call clause.
+
+### Fixed
+- Broadcasts that had returned `:ok` but were not flushed yet are no longer lost
+  when the producer shuts down gracefully. Before, the producer neither trapped
+  exits nor flushed on stop, so a deploy or restart dropped up to `:batch_interval`
+  of writes, which `PG2` would have sent at broadcast time. Now the producer sends
+  every registered node what it has not acked and waits at most `:call_timeout`;
+  its child spec allows `:call_timeout` plus one second to stop. A crash or kill
+  still loses writes that were buffered but not flushed: an ack means accepted,
+  not durable.
+- A node too slow to broadcast its whole backlog within `:call_timeout` no longer
+  gets the same backlog resent forever. After an outage the recovery batch was
+  everything the node missed in one call. If the worker needed longer than
+  `:call_timeout` for it (many local subscribers), the call timed out, the cursor
+  stayed, and the same backlog was sent again, so the cursor never moved and every
+  message arrived several times. A failed batch now halves that node's batch size,
+  and each acked batch that left messages behind doubles it and flushes again at
+  once.
+
 ## v0.2.4 - 2026-10-19
 ### Added
 - Telemetry event `[:echo_pubsub, :sync, :batch]` for every batch sent to a

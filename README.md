@@ -79,6 +79,12 @@ send absolute state rather than deltas, or dedupe by a per-message id. See
 [handling duplicate deliveries](https://echo-pubsub.hexdocs.pm/how-it-works.html#handling-duplicate-deliveries)
 for worked examples.
 
+**Accepted is not durable.** A broadcast returns `:ok` once the producer has
+buffered it; it is sent on the next flush (`:batch_interval`). When the producer
+stops gracefully (a supervised shutdown) it first sends every node what it has not
+acked, waiting at most `:call_timeout`. A crash or a kill skips that, so writes that
+were buffered but not flushed are lost.
+
 ## Usage
 
 *Note: I used LLM for typing - but ideas and decisions were mine*
@@ -122,6 +128,7 @@ Option                  | Description                                           
 `:pool_size`            | The number of workers and producers on each node                          | 1              |
 `:buffer_size`          | The numbers of messages to hold in memory for each producer in the pool   | 10_000         |
 `:batch_interval`       | Milliseconds to batch writes before a flush; `0` flushes immediately      | 200            |
+`:max_batch_size`       | Most messages sent to a node in one call; `:infinity` for no cap. A node that times out is sent half as many, then more as it catches up | `:infinity` |
 
 With `:pool_size > 1` there are independent producers and order/at-least-once is
 *per producer* (a broadcast routes by sender pid) - see

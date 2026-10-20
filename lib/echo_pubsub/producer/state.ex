@@ -19,10 +19,14 @@ defmodule EchoPubSub.Producer.State do
     * `registering` - map of node to the `{task reference, start cursor, worker pid}` of its pending
       registration; the reference is `nil` while a failed attempt waits for its retry
     * `workers` - map of node to the worker pid this producer last registered with
-    * `in_flight` - map of node to the `{task reference, target cursor}` of the batch being delivered to it,
-      or `{task reference, :probe}` while it is being probed
+    * `in_flight` - map of node to the `{task reference, target cursor, truncated?}` of the batch being
+      delivered to it, or `{task reference, :probe, false}` while it is being probed. `truncated?` is true
+      when the batch stopped short of the write cursor at the time it was prepared
+    * `batch_limits` - map of node to the batch size limit it is held to after a failed delivery;
+      absent means the configured `max_batch_size`
     * `suspects` - set (map to `true`) of nodes whose last delivery failed; they are probed before the next batch
     * `buffer` - ring buffer of the last `buffer_size` messages; oldest overwritten on wrap
+    * `max_batch_size` - most messages sent to a node in one call, or `:infinity`
     * `batch_interval` - milliseconds to batch writes before a flush; `0` flushes immediately
     * `call_timeout` - timeout in milliseconds for synchronous calls to remote nodes
     * `retry_interval` - milliseconds to wait before flushing again after a failure
@@ -37,9 +41,11 @@ defmodule EchoPubSub.Producer.State do
     field(:read_cursors, %{node() => cursor()}, default: %{})
     field(:registering, %{node() => {reference() | nil, cursor(), pid()}}, default: %{})
     field(:workers, %{node() => pid()}, default: %{})
-    field(:in_flight, %{node() => {reference(), cursor() | :probe}}, default: %{})
+    field(:in_flight, %{node() => {reference(), cursor() | :probe, boolean()}}, default: %{})
+    field(:batch_limits, %{node() => pos_integer()}, default: %{})
     field(:suspects, %{node() => true}, default: %{})
     field(:buffer, RingBuffer.t())
+    field(:max_batch_size, pos_integer() | :infinity)
     field(:batch_interval, timeout())
     field(:call_timeout, timeout())
     field(:retry_interval, pos_integer())
@@ -55,6 +61,7 @@ defmodule EchoPubSub.Producer.State do
     %__MODULE__{
       group: group,
       buffer: RingBuffer.new(Keyword.fetch!(opts, :buffer_size)),
+      max_batch_size: Keyword.fetch!(opts, :max_batch_size),
       batch_interval: Keyword.fetch!(opts, :batch_interval),
       call_timeout: Keyword.fetch!(opts, :call_timeout),
       retry_interval: Keyword.fetch!(opts, :retry_interval),
@@ -78,11 +85,55 @@ defmodule EchoPubSub.Producer.State do
     end
   end
 
-  @doc "What registered `node` still needs from the buffer."
+  @doc "What registered `node` still needs from the buffer, at most `batch_limit/2` messages."
   @spec pending(t(), node()) :: RingBuffer.pending()
   def pending(state, node) do
-    RingBuffer.pending(state.buffer, Map.fetch!(state.read_cursors, node), state.write_cursor)
+    RingBuffer.pending(
+      state.buffer,
+      Map.fetch!(state.read_cursors, node),
+      state.write_cursor,
+      batch_limit(state, node)
+    )
   end
+
+  @doc "The most messages the next batch to `node` may hold."
+  @spec batch_limit(t(), node()) :: pos_integer() | :infinity
+  def batch_limit(state, node), do: Map.get(state.batch_limits, node, state.max_batch_size)
+
+  @doc """
+  Holds `node` to half of the `batch_size` that just failed (at least 1), so a
+  node too slow for a big batch is sent ones it can finish within `call_timeout`.
+  """
+  @spec shrink_batch_limit(t(), node(), pos_integer()) :: t()
+  def shrink_batch_limit(state, node, batch_size) do
+    %{state | batch_limits: Map.put(state.batch_limits, node, max(1, div(batch_size, 2)))}
+  end
+
+  @doc """
+  Doubles the limit of a held `node`, up to `max_batch_size`; a node not held
+  keeps the configured size.
+  """
+  @spec grow_batch_limit(t(), node()) :: t()
+  def grow_batch_limit(state, node) do
+    case Map.fetch(state.batch_limits, node) do
+      {:ok, limit} when state.max_batch_size == :infinity or limit * 2 < state.max_batch_size ->
+        put_batch_limit(state, node, limit * 2)
+
+      {:ok, _limit} ->
+        reset_batch_limit(state, node)
+
+      :error ->
+        state
+    end
+  end
+
+  @doc "Sends `node` the configured `max_batch_size` again."
+  @spec reset_batch_limit(t(), node()) :: t()
+  def reset_batch_limit(state, node),
+    do: %{state | batch_limits: Map.delete(state.batch_limits, node)}
+
+  defp put_batch_limit(state, node, limit),
+    do: %{state | batch_limits: Map.put(state.batch_limits, node, limit)}
 
   @doc "Whether `node` has not acked every write yet."
   @spec behind?(t(), node()) :: boolean()
@@ -107,12 +158,12 @@ defmodule EchoPubSub.Producer.State do
   """
   @spec find_task(t(), reference()) ::
           {:registration, node(), cursor(), pid()}
-          | {:delivery, node(), cursor() | :probe}
+          | {:delivery, node(), cursor() | :probe, boolean()}
           | :unknown
   def find_task(state, ref) do
     case {find_entry(state.registering, ref), find_entry(state.in_flight, ref)} do
       {{node, {_ref, start, pid}}, nil} -> {:registration, node, start, pid}
-      {nil, {node, {_ref, target}}} -> {:delivery, node, target}
+      {nil, {node, {_ref, target, truncated?}}} -> {:delivery, node, target, truncated?}
       {nil, nil} -> :unknown
     end
   end
@@ -149,10 +200,13 @@ defmodule EchoPubSub.Producer.State do
     }
   end
 
-  @doc "Records a batch in flight to `node`, acking up to `target` once it succeeds, or a `:probe`."
-  @spec track_delivery(t(), node(), reference(), cursor() | :probe) :: t()
-  def track_delivery(state, node, ref, target) do
-    %{state | in_flight: Map.put(state.in_flight, node, {ref, target})}
+  @doc """
+  Records a batch in flight to `node`, acking up to `target` once it succeeds, or a `:probe`.
+  `truncated?` says the batch stopped short of the write cursor, so more is waiting.
+  """
+  @spec track_delivery(t(), node(), reference(), cursor() | :probe, boolean()) :: t()
+  def track_delivery(state, node, ref, target, truncated? \\ false) do
+    %{state | in_flight: Map.put(state.in_flight, node, {ref, target, truncated?})}
   end
 
   @doc "Forgets the batch in flight to `node`."
@@ -188,7 +242,8 @@ defmodule EchoPubSub.Producer.State do
       | read_cursors: Map.drop(state.read_cursors, nodes),
         workers: Map.drop(state.workers, nodes),
         registering: Map.drop(state.registering, nodes),
-        suspects: Map.drop(state.suspects, nodes)
+        suspects: Map.drop(state.suspects, nodes),
+        batch_limits: Map.drop(state.batch_limits, nodes)
     }
   end
 

@@ -20,6 +20,8 @@ defmodule EchoPubSub do
     * `:batch_interval` - The interval in milliseconds to batch messages before sending (default: 200)
     * `:call_timeout` - The timeout in milliseconds for GenServer calls to remote nodes (default: 5000)
     * `:retry_interval` - The interval in milliseconds before retrying after a failed call (default: 200)
+    * `:max_batch_size` - The most messages sent to a node in one call, or `:infinity` for no cap (default: `:infinity`).
+      A node that times out is sent half as many, then more again as it catches up, so a slow node still makes progress
     * `:capacity_warning_threshold` - Buffer fill ratio (0.0-1.0) that triggers warning; above 1.0 never warns (default: 0.4)
     * `:capacity_warning_interval` - Minimum seconds between warnings (default: 60)
 
@@ -104,10 +106,14 @@ defmodule EchoPubSub do
 
   @impl Adapter
   def direct_broadcast(adapter_name, node_name, topic, message, dispatcher) do
-    GenServer.call(
+    # A send, like PG2: a call would exit the caller for an unknown node and block
+    # it for a hung one, and Phoenix.Tracker and Presence call this on hot paths.
+    send(
       {Worker.name(group(adapter_name)), node_name},
       forward_to_local(topic, message, dispatcher)
     )
+
+    :ok
   end
 
   defp forward_to_local(topic, message, dispatcher) do
@@ -163,7 +169,12 @@ defmodule EchoPubSub do
       Supervisor.child_spec({Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
         id: Module.concat(group, :TaskSupervisor)
       ),
-      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer))
+      # On shutdown the producer flushes its unsent writes, which can take up to
+      # call_timeout; the default 5 s would kill it first when call_timeout is longer.
+      Supervisor.child_spec({Producer, producer_opts},
+        id: Module.concat(group, :Producer),
+        shutdown: options.call_timeout + 1_000
+      )
     ]
 
     worker_side = [

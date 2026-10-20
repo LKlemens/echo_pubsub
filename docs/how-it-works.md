@@ -84,7 +84,7 @@ Each producer holds three things in its state:
   current value.
 - **`read_cursors[node]`** - the next cursor each remote node still needs.
   Everything below it, that node has already acknowledged. It advances only on a
-  confirmed delivery (`advance/2` sets it to the current `write_cursor`); a failed
+  confirmed delivery (it moves past the messages the batch held); a failed
   send leaves it untouched, so the same messages are resent on the next flush.
   That is what makes delivery at-least-once.
 - **`buffer`** - an Erlang `:array` holding the last `buffer_size` messages. The
@@ -188,7 +188,14 @@ advances → the batch is replayed on rejoin. Crash *after* the reply → nothin
 the messages are already enqueued. So a mid-batch crash can **duplicate**
 (at-least-once), never drop - see [Handling duplicate deliveries](#handling-duplicate-deliveries).
 
-- **The producer crashes.** On restart `init` resets `write_cursor` to 0 with an
+- **The producer stops gracefully.** A supervised shutdown first sends every
+registered node the messages it has not acked, in one call per node, and waits at
+most `:call_timeout` for them. The producer's child spec allows that long. A
+write that returned `:ok` but was not flushed yet is delivered, as `PG2` would have
+done at broadcast time.
+
+- **The producer crashes.** A crash or a kill gets no such flush: writes that were
+buffered but not flushed are lost, because an ack means accepted, not durable. On restart `init` resets `write_cursor` to 0 with an
 empty buffer and re-registers with every worker. Each worker sees the node as
 *already registered* and broadcasts `:cursor_expired` to its local subscribers, so
 everyone reloads from a source of truth. Safe, with no silent gap.
@@ -219,8 +226,15 @@ So correctness is effectively unbounded.
   one batch per node is in flight, which is what keeps batches in cursor order.
 - **Retry.** Any failed send leaves that node's cursor untouched and schedules a
   retry flush, so the unacknowledged messages are redelivered. A node's cursor
-  advances to the cursor its batch was prepared at, so writes that landed while
-  that batch was in flight are not treated as acknowledged.
+  advances past the messages its batch held, so writes that landed while that
+  batch was in flight are not treated as acknowledged.
+- **Adaptive batch size.** After an outage the whole backlog is one batch. A
+  worker that needs longer than `:call_timeout` to broadcast it locally (many local
+  subscribers) would time out on every retry and never ack. So a failed batch
+  halves that node's batch limit (at least 1). Each acked batch that left messages
+  behind doubles the limit and flushes again at once. A batch that reaches the
+  write cursor clears the limit. `:max_batch_size` caps every batch (default
+  `:infinity`).
 
 ## Pools and ordering
 

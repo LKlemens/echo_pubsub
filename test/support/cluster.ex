@@ -199,6 +199,7 @@ defmodule EchoPubSub.Cluster do
       batch_interval: Keyword.get(opts, :batch_interval, 0),
       call_timeout: Keyword.get(opts, :call_timeout, 5000),
       retry_interval: Keyword.get(opts, :retry_interval, 50),
+      max_batch_size: Keyword.get(opts, :max_batch_size, :infinity),
       capacity_warning_threshold: Keyword.get(opts, :capacity_warning_threshold, 0.4),
       capacity_warning_interval: Keyword.get(opts, :capacity_warning_interval, 60)
     ]
