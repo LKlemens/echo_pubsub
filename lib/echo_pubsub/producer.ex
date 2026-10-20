@@ -21,6 +21,12 @@ defmodule EchoPubSub.Producer do
   is retried only once it answers, so a hung worker does not pile up one copy
   of the call per retry.
 
+  When the producer is stopped gracefully it first sends every registered node
+  what it has not acked, waiting at most `call_timeout` (see
+  `EchoPubSub.Producer.Shutdown`). A crash or kill skips that, so writes that were
+  accepted but not flushed are lost: an `:ok` from a broadcast means accepted, not
+  durable.
+
   A node more than `buffer_size` messages behind gets `{:expired, node}`
   instead of messages it can no longer be sent. Local subscribers never go
   through the producer: Phoenix delivers local broadcasts directly.
@@ -30,6 +36,7 @@ defmodule EchoPubSub.Producer do
   alias EchoPubSub.Producer.Delivery
   alias EchoPubSub.Producer.Registration
   alias EchoPubSub.Producer.RingBuffer
+  alias EchoPubSub.Producer.Shutdown
   alias EchoPubSub.Producer.State
   alias EchoPubSub.Producer.Telemetry
   alias EchoPubSub.Producer.Timers
@@ -76,6 +83,8 @@ defmodule EchoPubSub.Producer do
   @spec init([option()]) :: {:ok, State.t()}
   def init(opts) do
     group = Keyword.fetch!(opts, :group)
+    # So a supervised shutdown reaches terminate/2 and can flush the buffer.
+    Process.flag(:trap_exit, true)
     {_ref, pids} = :pg.monitor(Phoenix.PubSub, group)
     state = State.new(group, opts)
 
@@ -152,6 +161,14 @@ defmodule EchoPubSub.Producer do
   # Anything else must not take the buffer and every read cursor down with it.
   @impl GenServer
   def handle_info(_message, state), do: {:noreply, state}
+
+  # A graceful stop sends the writes that were accepted but not flushed yet. A
+  # crash or kill cannot: those writes are lost with the buffer.
+  @impl GenServer
+  def terminate(reason, state) do
+    if Shutdown.graceful?(reason), do: Shutdown.flush(state)
+    :ok
+  end
 
   # Registrations and deliveries run in tasks and report back, so the producer
   # keeps serving writes while a slow or unreachable peer burns its call timeout.

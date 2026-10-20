@@ -188,7 +188,14 @@ advances → the batch is replayed on rejoin. Crash *after* the reply → nothin
 the messages are already enqueued. So a mid-batch crash can **duplicate**
 (at-least-once), never drop - see [Handling duplicate deliveries](#handling-duplicate-deliveries).
 
-- **The producer crashes.** On restart `init` resets `write_cursor` to 0 with an
+- **The producer stops gracefully.** A supervised shutdown first sends every
+registered node the messages it has not acked, in one call per node, and waits at
+most `:call_timeout` for them. The producer's child spec allows that long. A
+write that returned `:ok` but was not flushed yet is delivered, as `PG2` would have
+done at broadcast time.
+
+- **The producer crashes.** A crash or a kill gets no such flush: writes that were
+buffered but not flushed are lost, because an ack means accepted, not durable. On restart `init` resets `write_cursor` to 0 with an
 empty buffer and re-registers with every worker. Each worker sees the node as
 *already registered* and broadcasts `:cursor_expired` to its local subscribers, so
 everyone reloads from a source of truth. Safe, with no silent gap.

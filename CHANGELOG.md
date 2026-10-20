@@ -6,6 +6,14 @@
   `:infinity` for no cap (default: `:infinity`, as before).
 
 ### Fixed
+- Broadcasts that had returned `:ok` but were not flushed yet are no longer lost
+  when the producer shuts down gracefully. Before, the producer neither trapped
+  exits nor flushed on stop, so a deploy or restart dropped up to `:batch_interval`
+  of writes, which `PG2` would have sent at broadcast time. Now the producer sends
+  every registered node what it has not acked and waits at most `:call_timeout`;
+  its child spec allows `:call_timeout` plus one second to stop. A crash or kill
+  still loses writes that were buffered but not flushed: an ack means accepted,
+  not durable.
 - A node too slow to broadcast its whole backlog within `:call_timeout` no longer
   gets the same backlog resent forever. After an outage the recovery batch was
   everything the node missed in one call. If the worker needed longer than

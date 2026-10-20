@@ -165,7 +165,12 @@ defmodule EchoPubSub do
       Supervisor.child_spec({Task.Supervisor, name: Module.concat(group, TaskSupervisor)},
         id: Module.concat(group, :TaskSupervisor)
       ),
-      Supervisor.child_spec({Producer, producer_opts}, id: Module.concat(group, :Producer))
+      # On shutdown the producer flushes its unsent writes, which can take up to
+      # call_timeout; the default 5 s would kill it first when call_timeout is longer.
+      Supervisor.child_spec({Producer, producer_opts},
+        id: Module.concat(group, :Producer),
+        shutdown: options.call_timeout + 1_000
+      )
     ]
 
     worker_side = [
