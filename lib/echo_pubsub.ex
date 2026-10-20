@@ -106,10 +106,14 @@ defmodule EchoPubSub do
 
   @impl Adapter
   def direct_broadcast(adapter_name, node_name, topic, message, dispatcher) do
-    GenServer.call(
+    # A send, like PG2: a call would exit the caller for an unknown node and block
+    # it for a hung one, and Phoenix.Tracker and Presence call this on hot paths.
+    send(
       {Worker.name(group(adapter_name)), node_name},
       forward_to_local(topic, message, dispatcher)
     )
+
+    :ok
   end
 
   defp forward_to_local(topic, message, dispatcher) do

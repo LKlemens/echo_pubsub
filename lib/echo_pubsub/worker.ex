@@ -44,6 +44,19 @@ defmodule EchoPubSub.Worker do
     {:ok, %{pubsub: name, registrations: registrations_table(group)}}
   end
 
+  # Direct broadcasts are sent, not called, so the caller never waits.
+  @impl true
+  def handle_info({:forward_to_local, _, _, _} = message, state) do
+    forward_to_local(state, message)
+    {:noreply, state}
+  end
+
+  # Anything else is not for the worker. Without this clause the first handle_info
+  # above would replace the default one and crash the worker on a stray message.
+  @impl true
+  def handle_info(_message, state), do: {:noreply, state}
+
+  # Kept for producers on older versions, which call a direct broadcast.
   @impl true
   def handle_call({:forward_to_local, _, _, _} = message, _from, state) do
     forward_to_local(state, message)

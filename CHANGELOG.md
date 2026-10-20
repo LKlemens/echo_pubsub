@@ -5,6 +5,17 @@
 - `:max_batch_size` option: the most messages sent to a node in one call, or
   `:infinity` for no cap (default: `:infinity`, as before).
 
+### Changed
+- `direct_broadcast/5` sends the message to the worker instead of calling it, like
+  `Phoenix.PubSub.PG2`. It returns `:ok` at once and never exits the caller for an
+  unknown or unreachable node, as the adapter contract (`:ok | {:error, term}`)
+  requires. Before, an unreachable node exited the caller and a hung one blocked it
+  for 5 seconds, which `Phoenix.Tracker` and `Phoenix.Presence` felt on their
+  broadcast paths. During a rolling upgrade, a worker older than this version
+  receives the message as an unexpected info message, which a `GenServer` logs
+  and drops, so direct broadcasts to nodes not yet upgraded are lost. Producers on
+  older versions still reach the new worker, which keeps its call clause.
+
 ### Fixed
 - Broadcasts that had returned `:ok` but were not flushed yet are no longer lost
   when the producer shuts down gracefully. Before, the producer neither trapped
