@@ -43,6 +43,7 @@ defmodule EchoPubSub.Producer do
           | {:batch_interval, non_neg_integer()}
           | {:call_timeout, timeout()}
           | {:retry_interval, pos_integer()}
+          | {:max_batch_size, pos_integer() | :infinity}
           | {:capacity_warning_threshold, number()}
           | {:capacity_warning_interval, non_neg_integer()}
 
@@ -113,8 +114,9 @@ defmodule EchoPubSub.Producer do
   end
 
   # A registration or delivery task reporting back. A delivery advances the cursor
-  # to the cursor the batch was prepared at, not to the current one: writes that
-  # landed while the batch was in flight are not acked by it.
+  # past the messages the batch held, not to the current write cursor: writes that
+  # landed while the batch was in flight, or that the batch limit left out, are
+  # not acked by it.
   @impl GenServer
   def handle_info({ref, result}, state) when is_reference(ref) do
     case State.find_task(state, ref) do
@@ -122,9 +124,9 @@ defmodule EchoPubSub.Producer do
         Process.demonitor(ref, [:flush])
         {:noreply, Registration.finish(state, node, start, pid, result)}
 
-      {:delivery, node, target} ->
+      {:delivery, node, target, truncated?} ->
         Process.demonitor(ref, [:flush])
-        {:noreply, Delivery.finish(state, node, target, result)}
+        {:noreply, Delivery.finish(state, node, target, truncated?, result)}
 
       :unknown ->
         {:noreply, state}
@@ -139,7 +141,7 @@ defmodule EchoPubSub.Producer do
       {:registration, node, start, pid} ->
         {:noreply, Registration.finish(state, node, start, pid, :error)}
 
-      {:delivery, node, _target} ->
+      {:delivery, node, _target, _truncated?} ->
         {:noreply, Delivery.abort(state, node)}
 
       :unknown ->

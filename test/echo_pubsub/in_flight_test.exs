@@ -80,7 +80,7 @@ defmodule EchoPubSub.InFlightTest do
     {target, write_cursor} =
       remote_run peer1, peer2_node: peer2.node do
         state = :sys.get_state(PubSubTest.Adapter.Producer)
-        {_ref, target} = Map.fetch!(state.in_flight, peer2_node)
+        {_ref, target, _truncated?} = Map.fetch!(state.in_flight, peer2_node)
         {target, state.write_cursor}
       end
 

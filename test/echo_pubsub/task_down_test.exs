@@ -14,7 +14,7 @@ defmodule EchoPubSub.TaskDownTest do
     {old_ref, cursor} =
       assert_wait_for(fn ->
         state = producer_state(peer1)
-        assert {ref, _target} = state.in_flight[peer2.node]
+        assert {ref, _target, _truncated?} = state.in_flight[peer2.node]
         {ref, state.read_cursors[peer2.node]}
       end)
 
@@ -23,7 +23,7 @@ defmodule EchoPubSub.TaskDownTest do
 
     assert_wait_for(fn ->
       state = producer_state(peer1)
-      assert {ref, _target} = state.in_flight[peer2.node]
+      assert {ref, _target, _truncated?} = state.in_flight[peer2.node]
       assert ref != old_ref
       assert state.read_cursors[peer2.node] == cursor
     end)
@@ -56,7 +56,7 @@ defmodule EchoPubSub.TaskDownTest do
     assert_wait_for(fn ->
       state = producer_state(peer1)
       assert {nil, _start, _pid} = state.registering[peer2.node]
-      assert {ref, :probe} = state.in_flight[peer2.node]
+      assert {ref, :probe, false} = state.in_flight[peer2.node]
       assert ref != old_ref
     end)
 

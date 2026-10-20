@@ -14,6 +14,10 @@ defmodule EchoPubSubOptionsTest do
         call_timeout: 0,
         call_timeout: :infinity,
         retry_interval: 0,
+        max_batch_size: 0,
+        max_batch_size: -5,
+        max_batch_size: 1.5,
+        max_batch_size: "10",
         batch_interval: -1,
         batch_interval: "200",
         capacity_warning_interval: -1,
@@ -51,6 +55,7 @@ defmodule EchoPubSubOptionsTest do
       buffer_size: 1,
       call_timeout: 1,
       retry_interval: 1,
+      max_batch_size: 1,
       batch_interval: 0,
       capacity_warning_interval: 0,
       capacity_warning_threshold: 0
@@ -58,6 +63,15 @@ defmodule EchoPubSubOptionsTest do
 
     # 2. init returns the child specs without starting them.
     assert {:ok, _spec} = EchoPubSub.init(opts)
+  end
+
+  test "accepts :infinity as max_batch_size, the default" do
+    opts = [name: InfiniteBatchTest, adapter_name: InfiniteBatchTest.Adapter]
+
+    assert EchoPubSub.Options.resolve!(opts, []).max_batch_size == :infinity
+
+    assert EchoPubSub.Options.resolve!(opts ++ [max_batch_size: :infinity], []).max_batch_size ==
+             :infinity
   end
 
   test "accepts a threshold above 1, which never warns" do

@@ -41,21 +41,25 @@ defmodule EchoPubSub.Producer.Delivery do
   end
 
   @doc "Applies the task's verdict, then flushes again if writes piled up behind the batch."
-  @spec finish(State.t(), node(), State.cursor() | :probe, Remote.verdict() | :ok | :error) ::
-          State.t()
-  def finish(state, node, :probe, :ok) do
+  @spec finish(
+          State.t(),
+          node(),
+          State.cursor() | :probe,
+          boolean(),
+          Remote.verdict() | :ok | :error
+        ) :: State.t()
+  def finish(state, node, :probe, _truncated?, :ok) do
     state |> State.untrack_delivery(node) |> State.clear_suspect(node) |> Timers.flush_now()
   end
 
-  def finish(state, node, :probe, :error) do
+  def finish(state, node, :probe, _truncated?, :error) do
     state |> State.untrack_delivery(node) |> Timers.retry()
   end
 
-  def finish(state, node, target, verdict) do
+  def finish(state, node, target, truncated?, verdict) do
     state
     |> State.untrack_delivery(node)
-    |> apply_verdict(node, target, verdict)
-    |> Timers.follow_up(node)
+    |> apply_verdict(node, target, truncated?, verdict)
   end
 
   @doc "Drops a task that died without a verdict; the cursor stays, so a retry resends."
@@ -66,8 +70,11 @@ defmodule EchoPubSub.Producer.Delivery do
 
   # The batch is prepared here (reads own heap; big payloads stay refc-shared)
   # so the task carries only message wrappers, never the whole ring buffer. The
-  # target is the write cursor now: writes landing mid-flight are not acked by it.
+  # target is the cursor just past the batch: writes landing mid-flight, and
+  # messages the batch limit left out, are not acked by it.
   defp start_task(state, pid, node, batch) do
+    {target, truncated?} = target(state, node, batch)
+
     timeout = state.call_timeout
     supervisor = Module.concat(state.group, TaskSupervisor)
 
@@ -75,26 +82,46 @@ defmodule EchoPubSub.Producer.Delivery do
       Task.Supervisor.async_nolink(supervisor, fn -> Remote.deliver(pid, batch, timeout) end)
 
     report_batch(state, node, batch)
-    State.track_delivery(state, node, task.ref, state.write_cursor)
+    State.track_delivery(state, node, task.ref, target, truncated?)
   end
+
+  # Truncated: the limit cut the batch short, so the node is still behind.
+  defp target(state, node, {:messages, messages}) do
+    target = Map.fetch!(state.read_cursors, node) + length(messages)
+    {target, target < state.write_cursor}
+  end
+
+  defp target(state, _node, {:expired, _missed}), do: {state.write_cursor, false}
 
   defp report_batch(state, node, {:messages, messages}),
     do: Telemetry.sync_batch(state.group, node, length(messages))
 
   defp report_batch(_state, _node, {:expired, _missed}), do: :ok
 
-  defp apply_verdict(state, node, target, :ok), do: State.ack(state, node, target)
+  defp apply_verdict(state, node, target, truncated?, :ok) do
+    state |> State.ack(node, target) |> continue(node, truncated?)
+  end
 
-  defp apply_verdict(state, node, target, {:expired, missed}) do
+  defp apply_verdict(state, node, target, _truncated?, {:expired, missed}) do
     Telemetry.expired(state.group, node, missed)
-    State.ack(state, node, target)
+    state |> State.ack(node, target) |> continue(node, false)
   end
 
-  defp apply_verdict(state, node, _target, {:failed, batch_size}) do
+  # A batch that timed out may have been too big for the node, not the node dead:
+  # halve it so the next one can finish within call_timeout.
+  defp apply_verdict(state, node, _target, _truncated?, {:failed, batch_size}) do
     Telemetry.sync_failure(state.group, node, batch_size)
-    state |> State.suspect(node) |> Timers.retry()
+    state |> State.shrink_batch_limit(node, batch_size) |> State.suspect(node) |> Timers.retry()
   end
 
-  defp apply_verdict(state, node, _target, :expired_failed),
+  defp apply_verdict(state, node, _target, _truncated?, :expired_failed),
     do: state |> State.suspect(node) |> Timers.retry()
+
+  # After a truncated batch the node is known to be behind by a full chunk, so
+  # grow the limit and send the next chunk at once instead of waiting a window.
+  defp continue(state, node, true),
+    do: state |> State.grow_batch_limit(node) |> Timers.flush_now()
+
+  defp continue(state, node, false),
+    do: state |> State.reset_batch_limit(node) |> Timers.follow_up(node)
 end

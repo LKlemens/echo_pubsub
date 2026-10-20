@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+### Added
+- `:max_batch_size` option: the most messages sent to a node in one call, or
+  `:infinity` for no cap (default: `:infinity`, as before).
+
+### Fixed
+- A node too slow to broadcast its whole backlog within `:call_timeout` no longer
+  gets the same backlog resent forever. After an outage the recovery batch was
+  everything the node missed in one call. If the worker needed longer than
+  `:call_timeout` for it (many local subscribers), the call timed out, the cursor
+  stayed, and the same backlog was sent again, so the cursor never moved and every
+  message arrived several times. A failed batch now halves that node's batch size,
+  and each acked batch that left messages behind doubles it and flushes again at
+  once.
+
 ## v0.2.4 - 2026-10-19
 ### Added
 - Telemetry event `[:echo_pubsub, :sync, :batch]` for every batch sent to a

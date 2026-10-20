@@ -11,6 +11,7 @@ defmodule EchoPubSub.Options do
           batch_interval: non_neg_integer(),
           call_timeout: pos_integer(),
           retry_interval: pos_integer(),
+          max_batch_size: pos_integer() | :infinity,
           capacity_warning_threshold: number(),
           capacity_warning_interval: non_neg_integer()
         }
@@ -22,6 +23,7 @@ defmodule EchoPubSub.Options do
     {:batch_interval, 200, :non_neg_integer},
     {:call_timeout, 5000, :pos_integer},
     {:retry_interval, 200, :pos_integer},
+    {:max_batch_size, :infinity, :pos_integer_or_infinity},
     {:capacity_warning_threshold, 0.4, :non_neg_number},
     {:capacity_warning_interval, 60, :non_neg_integer}
   ]
@@ -52,10 +54,15 @@ defmodule EchoPubSub.Options do
   end
 
   defp valid?(:pos_integer, value), do: is_integer(value) and value > 0
+
+  defp valid?(:pos_integer_or_infinity, value),
+    do: value == :infinity or (is_integer(value) and value > 0)
+
   defp valid?(:non_neg_integer, value), do: is_integer(value) and value >= 0
   defp valid?(:non_neg_number, value), do: is_number(value) and value >= 0
 
   defp describe(:pos_integer), do: "a positive integer"
+  defp describe(:pos_integer_or_infinity), do: "a positive integer or :infinity"
   defp describe(:non_neg_integer), do: "a non-negative integer"
   defp describe(:non_neg_number), do: "a non-negative number"
 end
